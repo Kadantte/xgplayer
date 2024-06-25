@@ -1,5 +1,5 @@
-import { BasePlugin, Events, Errors } from 'xgplayer'
-import { EVENT } from 'xgplayer-streaming-shared'
+import { BasePlugin, Errors, Events } from 'xgplayer'
+import { EVENT, MSE } from 'xgplayer-streaming-shared'
 import { Hls } from './hls'
 import { Event } from './hls/constants'
 import PluginExtension from './plugin-extension'
@@ -55,10 +55,14 @@ export class HlsPlugin extends BasePlugin {
 
   beforePlayerInit () {
     const config = this.player.config
+    const hlsOpts = config.hls || {}
 
-    if (!config.url &&
-      // private config key
-      !config.__allowHlsEmptyUrl__) {
+    if (
+      (!config.url &&
+        // private config key
+        !config.__allowHlsEmptyUrl__) ||
+      (!hlsOpts.preferMMS && MSE.isMMSOnly())
+    ) {
       return
     }
 
@@ -66,7 +70,6 @@ export class HlsPlugin extends BasePlugin {
     this.player.switchURL = this._onSwitchURL
     this.player.handleSource = false // disable player source handle
 
-    const hlsOpts = config.hls || {}
     hlsOpts.innerDegrade = hlsOpts.innerDegrade || config.innerDegrade
     if (hlsOpts.disconnectTime === null || hlsOpts.disconnectTime === undefined) hlsOpts.disconnectTime = 0
 
@@ -113,6 +116,7 @@ export class HlsPlugin extends BasePlugin {
     this._transCoreEvent(EVENT.LOAD_COMPLETE)
     this._transCoreEvent(EVENT.LOAD_RETRY)
     this._transCoreEvent(EVENT.SOURCEBUFFER_CREATED)
+    this._transCoreEvent(EVENT.MEDIASOURCE_OPENED)
     this._transCoreEvent(EVENT.REMOVE_BUFFER)
     this._transCoreEvent(EVENT.BUFFEREOS)
     this._transCoreEvent(EVENT.KEYFRAME)
@@ -174,16 +178,22 @@ export class HlsPlugin extends BasePlugin {
   }
 
   _onSwitchURL = (url, args) => {
-    const { player, hls } = this
-    if (hls) {
-      const options = parseSwitchUrlArgs(args, this)
-      player.config.url = url
-      hls.switchURL(url, options).catch(e => {})
+    return new Promise((resolve, reject) => {
+      const { player, hls } = this
+      if (hls) {
+        const options = parseSwitchUrlArgs(args, this)
+        player.config.url = url
+        hls.switchURL(url, options)
+          .then(() => resolve(true))
+          .catch(reject)
 
-      if (!options.seamless && this.player.config?.hls?.keepStatusAfterSwitch) {
-        this._keepPauseStatus()
+        if (!options.seamless && this.player.config?.hls?.keepStatusAfterSwitch) {
+          this._keepPauseStatus()
+        }
+      } else {
+        reject()
       }
-    }
+    })
   }
 
   _keepPauseStatus = () => {

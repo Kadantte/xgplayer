@@ -4,7 +4,7 @@ import { getAbsoluteUrl, parseAttr, parseTag } from './utils'
 export function parseMediaPlaylist (lines, parentUrl, useLowLatency) {
   const media = new MediaPlaylist()
   media.url = parentUrl
-  let curSegment = new MediaSegment()
+  let curSegment = new MediaSegment(parentUrl)
   let curInitSegment = null
   let curKey = null
   let totalDuration = 0
@@ -18,9 +18,6 @@ export function parseMediaPlaylist (lines, parentUrl, useLowLatency) {
 
   // eslint-disable-next-line no-cond-assign
   while (line = lines[index++]) {
-    if (endOfList) {
-      break
-    }
     if (line[0] !== '#') { // url
       if (media.lowLatency) {
         curSN++
@@ -33,7 +30,7 @@ export function parseMediaPlaylist (lines, parentUrl, useLowLatency) {
       if (curKey) curSegment.key = curKey.clone(curSN)
       if (curInitSegment) curSegment.initSegment = curInitSegment
       media.segments.push(curSegment)
-      curSegment = new MediaSegment()
+      curSegment = new MediaSegment(parentUrl)
       curSN++
       continue
     }
@@ -70,11 +67,6 @@ export function parseMediaPlaylist (lines, parentUrl, useLowLatency) {
       }
         break
       case 'ENDLIST': {
-        const lastSegment = media.segments[media.segments.length - 1]
-        if (lastSegment) {
-          lastSegment.isLast = true
-        }
-        media.live = false
         endOfList = true
       }
         break
@@ -105,7 +97,7 @@ export function parseMediaPlaylist (lines, parentUrl, useLowLatency) {
         if (curKey) curSegment.key = curKey.clone(curSN)
         if (curInitSegment) curSegment.initSegment = curInitSegment
         media.segments.push(curSegment)
-        curSegment = new MediaSegment()
+        curSegment = new MediaSegment(parentUrl)
         partSegmentIndex++
       }
 
@@ -161,7 +153,7 @@ export function parseMediaPlaylist (lines, parentUrl, useLowLatency) {
           curSegment.key = curKey.clone(0)
         }
         curInitSegment = curSegment
-        curSegment = new MediaSegment()
+        curSegment = new MediaSegment(parentUrl)
       }
         break
       default:
@@ -169,13 +161,19 @@ export function parseMediaPlaylist (lines, parentUrl, useLowLatency) {
   }
 
   media.segments = media.segments.filter(x => x.duration !== 0)
-
   const lastSegment = media.segments[media.segments.length - 1]
+
   if (lastSegment) {
+    if (endOfList) {
+      lastSegment.isLast = true
+    
+    }
     media.endSN = lastSegment.sn
     media.endPartIndex = lastSegment.partIndex
   }
-
+  if (endOfList) {
+    media.live = false
+  }
   media.totalDuration = totalDuration
   media.endCC = curCC
 

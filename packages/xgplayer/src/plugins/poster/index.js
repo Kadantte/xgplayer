@@ -22,7 +22,7 @@ class Poster extends Plugin {
       hideCanplay: false, // 设置为true时，播放后才隐藏，在视频地址更新后会重新显示poster。默认为false，即在play事件触发后隐藏poster
       notHidden: false, // 是否一直显示
       poster: '', // 封面图地址
-      fillMode: 'fixWidth', // 封面图填充方式，fixWidth / fixHeight / cover / contain
+      fillMode: 'fixWidth' // 封面图填充方式，fixWidth / fixHeight / cover / contain
     }
   }
 
@@ -75,6 +75,14 @@ class Poster extends Plugin {
         Util.addClass(this.root, 'hide')
       })
     }
+  }
+
+  setConfig (config) {
+    Object.keys(config).forEach(key => {
+      this.config[key] = config[key]
+    })
+    const { poster } = this.config
+    this.update(poster)
   }
 
   onTimeUpdate () {

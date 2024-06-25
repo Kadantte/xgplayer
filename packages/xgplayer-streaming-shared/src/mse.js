@@ -1,9 +1,9 @@
 /* eslint-disable no-undef */
-import { createPublicPromise, nowTime } from './utils'
 import { Buffer } from './buffer'
-import { StreamingError, ERR } from './error'
 import { isBrowser } from './env'
+import { ERR, StreamingError } from './error'
 import { Logger } from './logger'
+import { createPublicPromise, nowTime, SafeJSON } from './utils'
 
 function getMediaSource (preferMMS = true) {
   try {
@@ -17,6 +17,23 @@ function getMediaSource (preferMMS = true) {
 
 function isMMS (mediaSource) {
   return /ManagedMediaSource/gi.test(Object.prototype.toString.call(mediaSource))
+}
+
+/**
+ * @param {TimeRanges} buffered
+ */
+function getTimeRanges (buffered) {
+  const ranges = []
+
+  if (buffered instanceof TimeRanges) {
+    for (let i = 0; i < buffered.length; i++) {
+      ranges.push({
+        start: buffered.start(i),
+        end: buffered.end(i)
+      })
+    }
+  }
+  return ranges
 }
 
 /** @enum {string} */
@@ -61,6 +78,10 @@ export class MSE {
       this._logger.error(mime, error)
       return false
     }
+  }
+
+  static isMMSOnly () {
+    return typeof ManagedMediaSource !== 'undefined' && typeof MediaSource === 'undefined'
   }
 
   /** @type { HTMLMediaElement | null } */
@@ -108,6 +129,17 @@ export class MSE {
 
   get isOpened () {
     return this.mediaSource?.readyState === 'open'
+  }
+
+  get hasOpTasks () {
+    let flag = false
+    Object.keys(this._queue).forEach(k => {
+      const queue = this._queue[k]
+      if (Array.isArray(queue)) {
+        flag ||= queue.length > 0
+      }
+    })
+    return flag
   }
 
   get url () {
@@ -310,10 +342,23 @@ export class MSE {
     const sb = this._sourceBuffer[type]
     if (!this.mediaSource || !sb || sb.mimeType === mimeType) return Promise.resolve()
 
-    if (typeof sb.changeType !== 'function') return Promise.reject()
+    if (typeof sb.changeType !== 'function') {
+      return Promise.reject(
+        new StreamingError(
+          ERR.MEDIA,
+          ERR.SUB_TYPES.MSE_CHANGE_TYPE,
+          new Error('changeType is not a function')
+        )
+      )
+    }
 
     return this._enqueueOp(type, () => {
-      sb.changeType(mimeType)
+      try {
+        sb.changeType(mimeType)
+      } catch (e) {
+        throw new StreamingError(ERR.MEDIA, ERR.SUB_TYPES.MSE_CHANGE_TYPE, e)
+      }
+
       sb.mimeType = mimeType
       this._onSBUpdateEnd(type)
     }, 'changeType', {mimeType})
@@ -545,11 +590,18 @@ export class MSE {
         } catch (error) {
           if (error && error.message && error.message.indexOf('SourceBuffer is full') >= 0) {
             this._mseFullFlag[type] = true
+            if (op.context && typeof op.context === 'object'){
+              op.context.isFull = true
+            }
             this._logger.error('[MSE error],  context,', op.context, ' ,name,', op.opName, ',err,SourceBuffer is full')
             op.promise.reject(new StreamingError(ERR.MEDIA, ERR.SUB_TYPES.MSE_FULL, error))
           } else {
             this._logger.error(error)
-            op.promise.reject(new StreamingError(ERR.MEDIA, ERR.SUB_TYPES.MSE_OTHER, error))
+            op.promise.reject(
+              error.constructor === StreamingError
+                ? error
+                : new StreamingError(ERR.MEDIA, ERR.SUB_TYPES.MSE_OTHER, error)
+            )
             queue.shift()
             this._startQueue(type)
           }
@@ -567,8 +619,12 @@ export class MSE {
       }
       if (op) {
         const costtime = nowTime() - this._opst
-        this._logger.debug('UpdateEnd', op.opName, costtime, op.context)
+        this._logger.debug(`UpdateEnd(${type}/${op.opName})`, SafeJSON.stringify(getTimeRanges(this._sourceBuffer[type]?.buffered)), costtime, op.context)
         op.promise.resolve({name: op.opName, context: op.context, costtime})
+        const callback = op.context?.callback
+        if (callback && typeof callback === 'function'){
+          callback(op.context)
+        }
         this._startQueue(type)
       }
     }

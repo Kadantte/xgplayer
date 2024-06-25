@@ -575,6 +575,14 @@ class Player extends MediaProxy {
     this.media.removeEventListener('webkitendfullscreen', this._onWebkitendfullscreen)
   }
 
+  _clearUserTimer () {
+    if (!this.userTimer) {
+      return
+    }
+    Util.clearTimeout(this, this.userTimer)
+    this.userTimer = null
+  }
+
   /**
    *
    * @param { any } [url]
@@ -979,13 +987,7 @@ class Player extends MediaProxy {
         reject(e)
       }
       const _canplay = () => {
-        if (this.duration > 0 && this.__startTime > 0) {
-          /**
-           * @type {number}
-           */
-          this.currentTime = this.__startTime
-          this.__startTime = -1
-        }
+        this._seekToStartTime()
         if (isPaused) {
           this.pause()
         }
@@ -1451,6 +1453,9 @@ class Player extends MediaProxy {
    */
   getFullscreen (el = this.config.fullscreenTarget) {
     const { root, media } = this
+    if (el === 'video' || el === 'media') {
+      el = this[el]
+    }
     if (!el) {
       el = root
     }
@@ -1682,6 +1687,7 @@ class Player extends MediaProxy {
       this.onBlur(data)
       return
     }
+    this._clearUserTimer()
     this.emit(Events.PLAYER_BLUR, {
       paused: this.paused,
       ended: this.ended,
@@ -1698,18 +1704,12 @@ class Player extends MediaProxy {
     const { innerStates } = this
     this.isActive = true
     this.removeClass(STATE_CLASS.INACTIVE)
-    if (this.userTimer) {
-      Util.clearTimeout(this, this.userTimer)
-      this.userTimer = null
-    }
+    this._clearUserTimer()
     if (data.isLock !== undefined) {
       innerStates.isActiveLocked = data.isLock
     }
     if (data.autoHide === false || data.isLock === true || innerStates.isActiveLocked) {
-      if (this.userTimer) {
-        Util.clearTimeout(this, this.userTimer)
-        this.userTimer = null
-      }
+      this._clearUserTimer()
       return
     }
     const time = data && data.delay ? data.delay : this.config.inactive
@@ -1725,7 +1725,7 @@ class Player extends MediaProxy {
    * @returns
    */
   onBlur ({ ignorePaused = false } = {}) {
-    if (!this.isActive || this.innerStates.isActiveLocked) {
+    if (this.innerStates.isActiveLocked) {
       return
     }
     const { closePauseVideoFocus } = this.config
@@ -1742,10 +1742,7 @@ class Player extends MediaProxy {
     const { autoplay, defaultPlaybackRate } = this.config
 
     XG_DEBUG.logInfo('player', 'canPlayFunc, startTime', this.__startTime)
-    if (this.__startTime > 0 && this.duration > 0) {
-      this.currentTime = this.__startTime > this.duration ? this.duration : this.__startTime
-      this.__startTime = -1
-    }
+    this._seekToStartTime()
 
     // 解决浏览器安装了一些倍速扩展插件的情况下，倍速设置失效问题
     this.playbackRate = defaultPlaybackRate;
@@ -1810,7 +1807,11 @@ class Player extends MediaProxy {
         this._fullScreenOffset = null
       }
       if (!this.cssfullscreen) {
-        this.recoverFullStyle( this.root,this._fullscreenEl, STATE_CLASS.FULLSCREEN)
+        let el = this._fullscreenEl
+        if (!el && (this.root.contains(event.target) || event.target === this.root)) {
+          el = event.target
+        }
+        this.recoverFullStyle( this.root, el, STATE_CLASS.FULLSCREEN)
       } else {
         this.removeClass(STATE_CLASS.FULLSCREEN)
       }
@@ -1844,16 +1845,20 @@ class Player extends MediaProxy {
     this.waitTimer && Util.clearTimeout(this, this.waitTimer)
   }
 
-  onDurationchange () {
-    if (this.__startTime > 0 && this.duration > 0) {
-      this.currentTime = this.__startTime
-      this.__startTime = -1
-    }
-  }
-
   onLoadeddata () {
     this.isError = false
     this.isSeeking = false
+    if (this.__startTime > 0) {
+      if (this.duration > 0) {
+        this._seekToStartTime()
+      } else {
+        // 在安卓原生video播放hls时，loadeddata触发时durationchange事件虽然已经触发过了但duration仍然为0，
+        // 需要在下一次durationchange触发时再重新设置起播时间
+        this.once(Events.DURATION_CHANGE, () => {
+          this._seekToStartTime()
+        })
+      }
+    }
   }
 
   onLoadstart () {
@@ -1880,10 +1885,7 @@ class Player extends MediaProxy {
     this.addClass(STATE_CLASS.PAUSED)
     this.updateAcc('pause')
     if (!this.config.closePauseVideoFocus) {
-      if (this.userTimer) {
-        Util.clearTimeout(this, this.userTimer)
-        this.userTimer = null
-      }
+      this._clearUserTimer()
       this.focus()
     }
   }
@@ -1981,7 +1983,7 @@ class Player extends MediaProxy {
     }
 
     // 兼容safari在调整为静音之后未调用play自动起播问题
-    if (!this.paused && this.state < STATES.RUNNING && this.duration) {
+    if (!this.paused && this.state === STATES.NOTALLOW && this.duration) {
       this.setState(STATES.RUNNING)
       this.emit(Events.AUTOPLAY_STARTED)
     }
@@ -2046,11 +2048,20 @@ class Player extends MediaProxy {
   }
 
   /**
-   *
-   * @param { number } time
+   * 目标时间点是否在buffer内
+   * @param { number } time 时间点
+   * @param options 判断阈值配置，可选的
+   * @param options.startDiff 判断起始阈值，即该时间下距离buffer开始点超过阈值时才算作在buffer内，默认为0
+   * @param options.endDiff 判断结束阈值，即该时间下距离buffer结束点超过阈值时才算作在buffer内，默认为0
    * @returns { boolean }
    */
-  checkBuffer (time) {
+  checkBuffer (
+    time,
+    options = {
+      startDiff: 0,
+      endDiff: 0
+    }) {
+    const { startDiff = 0, endDiff = 0 } = options || {}
     const buffered = this.media.buffered
     if (!buffered || buffered.length === 0 || !this.duration) {
       return true
@@ -2058,7 +2069,7 @@ class Player extends MediaProxy {
     const currentTime = time || this.media.currentTime || 0.2
     const len = buffered.length
     for (let i = 0; i < len; i++) {
-      if (buffered.start(i) <= currentTime && buffered.end(i) > currentTime) {
+      if (buffered.start(i) + startDiff <= currentTime && buffered.end(i) - endDiff > currentTime) {
         return true
       }
     }
@@ -2275,8 +2286,20 @@ class Player extends MediaProxy {
    * @returns { url: IUrl, [propName: string]: any }
    */
   _preProcessUrl (url, ext) {
-    const { preProcessUrl } = this.config
-    return !Util.isBlob(url) && typeof preProcessUrl === 'function' ? preProcessUrl(url, ext) : { url }
+    const { preProcessUrl, preProcessUrlOptions } = this.config
+    const processUrlOptions = Object.assign({}, preProcessUrlOptions, ext)
+    return !Util.isBlob(url) && typeof preProcessUrl === 'function' ? preProcessUrl(url, processUrlOptions) : { url }
+  }
+
+
+  /**
+   * @description 跳转至配置的起播时间点
+   */
+  _seekToStartTime () {
+    if (this.__startTime > 0 && this.duration > 0) {
+      this.currentTime = this.__startTime > this.duration ? this.duration : this.__startTime
+      this.__startTime = -1
+    }
   }
 
   /**

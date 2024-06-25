@@ -23,6 +23,11 @@
 *   onlyVideo?: boolean,
 *   onlyAudio?: boolean,
 *   preferMMS?: boolean,
+*   mseLowLatency?: boolean,
+*   durationForLowLatency?: number, // s
+*   chunkCountForSpeed?: number,
+*   skipChunkSize?: number, // Byte
+*   longtimeNoReceived?: number,
 *   preProcessUrl?: (url: string, ext?: { [propName: string]: any }) => { url: string, [propName: string]: any }
  * }} FlvOption
  */
@@ -50,6 +55,11 @@ export function getOption (opts) {
     onlyVideo: false,
     onlyAudio: false,
     preferMMS: false,
+    mseLowLatency: true, // mse 低延迟模式渲染 https://issues.chromium.org/issues/41161663
+    durationForMSELowLatencyOff: 6, // s
+    chunkCountForSpeed: 50,
+    skipChunkSize: 1000,
+    longtimeNoReceived: 3000,
     ...opts
   }
 

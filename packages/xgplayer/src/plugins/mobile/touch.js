@@ -166,7 +166,6 @@ class Touche {
 
   onTouchEnd = (e) => {
     const { _pos, root } = this
-    // config.needPreventDefault && preventToucheDefault(e)
     this.__clearPress()
     root.removeEventListener(this.events.cancel, this.onTouchCancel)
     root.removeEventListener(this.events.end, this.onTouchEnd)

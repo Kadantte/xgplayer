@@ -9,6 +9,7 @@ import { Playlist } from './playlist'
 import { SegmentLoader } from './segment-loader'
 import { clamp } from './utils'
 
+export { getConfig, ManifestLoader, Playlist, SegmentLoader}
 /**
  * @typedef {import('./manifest-loader/parser/model').MediaSegment} MediaSegment
  */
@@ -82,6 +83,7 @@ export class Hls extends EventEmitter {
 
     this._stats = new MediaStatsService(this, 90000)
 
+    this.media.addEventListener('loadeddata', this._onLoadeddata)
     this.media.addEventListener('play', this._onPlay)
     this.media.addEventListener('pause', this._onPause)
     this.media.addEventListener('seeking', this._onSeeking)
@@ -92,7 +94,7 @@ export class Hls extends EventEmitter {
   get streams () { return this._playlist.streams }
   get currentStream () { return this._playlist.currentStream }
   get hasSubtitle () { return this._playlist.hasSubtitle}
-
+  get totalDuration () { return this._playlist.totalDuration}
   get baseDts () {
     return this._bufferService?.baseDts
   }
@@ -138,7 +140,7 @@ export class Hls extends EventEmitter {
     const manifest = await this._loadM3U8(url)
     const { currentStream } = this._playlist
 
-    if (this._urlSwitching) {
+    if (this._urlSwitching && !this.isLive) {
       if (currentStream.bitrate === 0 && this._switchUrlOpts?.bitrate) {
         currentStream.bitrate = this._switchUrlOpts?.bitrate
       }
@@ -152,6 +154,17 @@ export class Hls extends EventEmitter {
         // move to next segment in case of media stall
         const bufferClearStartPoint = nextSeg.start
         await this._bufferService.removeBuffer(bufferClearStartPoint)
+      }
+    }
+
+    if (this._urlSwitching && this.isLive) {
+      // skip loaded segment
+      const preIndex = this._playlist.setNextSegmentBySN(this._prevSegSn)
+      logger.log(`segment nb=${this._prevSegSn} index of ${preIndex} in the new playlist`)
+      // the new stream no matched with old one
+      if (preIndex === -1) {
+        this._prevSegCc = null
+        this._prevSegSn = null
       }
     }
 
@@ -246,8 +259,10 @@ export class Hls extends EventEmitter {
       return this.media.play(true)
     } else {
       this._urlSwitching = true
-      this._prevSegSn = null
-      this._prevSegCc = null
+      if (!this.isLive) {
+        this._prevSegSn = null
+        this._prevSegCc = null
+      }
 
       this._playlist.reset()
       this._bufferService.seamlessSwitch()
@@ -338,6 +353,7 @@ export class Hls extends EventEmitter {
     this._playlist.reset()
     this._segmentLoader.reset()
     this._seiService?.reset()
+    this.media.removeEventListener('loadeddata', this._onLoadeddata)
     this.media.removeEventListener('play', this._onPlay)
     this.media.removeEventListener('pause', this._onPause)
     this.media.removeEventListener('seeking', this._onSeeking)
@@ -454,21 +470,26 @@ export class Hls extends EventEmitter {
    */
   _loadSegment = async () => {
     if (this._segmentProcessing || !this.media) return
-    const nextSeg = this._playlist.nextSegment
+    const { nextSegment, lastSegment } = this._playlist
     const { config } = this
+    const minFrameDuration = 0.016
+    // Constrain in the range of 0.016 ~ 0.1, 0.016 is the duration of 1 frame at 60fps
+    // “minFrameDuration / 2” is to handle the media buffer precision deviation problem
+    const maxBufferThroughout = Math.min(
+      Math.max(lastSegment?.duration - minFrameDuration / 2 || 0, minFrameDuration),
+      0.1
+    )
 
-    if (!nextSeg) return
+    if (!nextSegment) return
 
     if (!this.isLive) {
       let bInfo = this.bufferInfo()
       if (this.media.paused && !this.media.currentTime) {
         bInfo = this.bufferInfo(bInfo.nextStart || 0.5)
       }
-      const bufferThroughout = Math.abs(bInfo.end - this.media.duration) < 0.1
+      const bufferThroughout = Math.abs(bInfo.end - this.media.duration) < maxBufferThroughout
       if (bInfo.remaining >= config.preloadTime || bufferThroughout) {
-        if (bufferThroughout && this._bufferService.msIsOpend) {
-          this._bufferService.endOfStream()
-        }
+        this._tryEos()
         return
       }
 
@@ -478,9 +499,9 @@ export class Hls extends EventEmitter {
 
       // reset segment pointer by buffer end
       if (!this._urlSwitching &&
-        this._prevSegSn !== nextSeg.sn - 1 &&
+        this._prevSegSn !== nextSegment.sn - 1 &&
         bInfo.end &&
-        Math.abs(nextSeg.start - bInfo.end) > 1) {
+        Math.abs(nextSegment.start - bInfo.end) > 1) {
         this._playlist.setNextSegmentByIndex(this._playlist.findSegmentIndexByTime(bInfo.end + 0.1))
       }
     }
@@ -500,7 +521,7 @@ export class Hls extends EventEmitter {
     let cachedError = null
     try {
       this._segmentProcessing = true
-      logger.log(`load segment, sn:${seg.sn}, partIndex:${seg.partIndex}`)
+      logger.log(`load segment, sn:${seg.sn}, [${seg.start}, ${seg.end}], partIndex:${seg.partIndex}`)
       appended = await this._reqAndBufferSegment(seg, this._playlist.getAudioSegment(seg))
     } catch (error) {
       // If an exception is thrown here, other reference functions
@@ -521,7 +542,22 @@ export class Hls extends EventEmitter {
       return this._emitError(StreamingError.create(cachedError))
     }
     if (appended) {
-      if (this._urlSwitching) {
+      const bufferEnd = this.bufferInfo().end
+      if (this.isLive && !this.media.seeking && bufferEnd && Math.abs(seg.end - bufferEnd) > 1) {
+        logger.warn(`segment: ${seg.sn} expected end=${seg.end}, real end=${bufferEnd}`)
+        this._playlist.feedbackLiveEdge(seg, bufferEnd)
+      }
+
+      const sameStream = this._playlist.currentStream?.url === seg.parentUrl
+      // switching -> pre playlist segment appended -> new playlist loaded -> new playlist segment appended
+      // _needInitSegment status maybe reset by pre playlist segment appendBuffer()
+      if (this._urlSwitching && !sameStream) {
+        logger.warn('pre playlist segment appended!')
+        this._bufferService.seamlessSwitch()
+      }
+
+      // switching -> new playlist loaded -> new playlist segment appended
+      if (this.isLive && this._urlSwitching && sameStream) {
         this._urlSwitching = false
         this.emit(Event.SWITCH_URL_SUCCESS, { url: this.config.url })
       }
@@ -557,16 +593,37 @@ export class Hls extends EventEmitter {
     const data = await this._bufferService.decryptBuffer(...responses)
     if (!data) return
     const sn = seg ? seg.sn : audioSeg.sn
-    const start = seg ? seg.start : audioSeg.start
+    let start = seg ? seg.start : audioSeg.start
     const stream = this._playlist.currentStream
     this._bufferService.createSource(data[0], data[1], stream?.videoCodec, stream?.audioCodec)
     const before = Date.now()
-    await this._bufferService.appendBuffer(seg, audioSeg, data[0], data[1], discontinuity, this._prevSegSn === sn - 1, start)
+    const contiguous = this._prevSegSn === sn - 1
+    if (this.isLive && this._urlSwitching) {
+      const segStart = this.bufferInfo().end
+      // update the new segements [start、end] to match timeline.
+      // (this appended segment duration maybe not matched with m3u8 description)
+      this._playlist.updateSegmentsRanges(sn, segStart)
+      logger.warn(`update the new playlist liveEdge, segment id=${sn}, buffer start=${segStart}, liveEdge=${this._playlist.liveEdge}`)
+      start = segStart
+    }
+    await this._bufferService.appendBuffer(seg, audioSeg, data[0], data[1], discontinuity, contiguous, start)
     this.emit(Event.APPEND_COST, {elapsed: Date.now() - before, url: seg.url})
     await this._bufferService.evictBuffer(this.config.bufferBehind)
     this._prevSegCc = cc
     this._prevSegSn = sn
     return true
+  }
+
+  /**
+   * @private
+   */
+  _onLoadeddata = () => {
+    if (this.isLive && !this.config.mseLowLatency) {
+      // update duration to Infinity
+      if (this.media.duration !== Infinity) {
+        this._bufferService.updateDuration(Infinity).catch(e=>{})
+      }
+    }
   }
 
   /**
@@ -632,6 +689,7 @@ export class Hls extends EventEmitter {
     const info = Buffer.info(Buffer.get(this.media), seekTime, 0.1)
     if (curSeg) {
       if (info.end && Math.abs(info.end - curSeg.end) < 0.2) return
+      if (this.isLive && info.end) return
     }
 
     const segIndex = this._playlist.findSegmentIndexByTime(seekTime)
@@ -790,17 +848,21 @@ export class Hls extends EventEmitter {
       return
     }
 
-    if (Buffer.end(buffered) < 0.1 || !media.readyState) return
+    if (Buffer.end(buffered) >= 0.1 && media.readyState) {
+      if (isMediaPlaying(media)) {
+        this._loadSegment()
+        if (this._gapService) {
+          this._gapService.do(media, this.config.maxJumpDistance, this.isLive)
+        }
+      } else {
+        if (media.readyState < 2 && this._gapService) {
+          this._gapService.do(media, this.config.maxJumpDistance, !media.currentTime ? true : this.isLive)
+        }
+      }
+    }
 
-    if (isMediaPlaying(media)) {
-      this._loadSegment()
-      if (this._gapService) {
-        this._gapService.do(media, this.config.maxJumpDistance, this.isLive)
-      }
-    } else {
-      if (media.readyState < 2 && this._gapService) {
-        this._gapService.do(media, this.config.maxJumpDistance, !media.currentTime ? true : this.isLive)
-      }
+    if (!this.isLive) {
+      this._tryEos()
     }
   }
 
@@ -852,6 +914,39 @@ export class Hls extends EventEmitter {
     }
 
     return nextLoadPoint
+  }
+
+  /**
+   * @private
+   */
+  _tryEos () {
+    const { media } = this
+    const { nextSegment, lastSegment } = this._playlist
+    const eosAllowed =
+      (!nextSegment ||
+        (lastSegment &&
+          // Use the mid-time of lastSegment to determine
+          // whether the Media Buffer has been buffered to the end
+          Buffer.isBuffered(media, lastSegment.start + lastSegment.duration / 2))) &&
+      media.readyState &&
+      media.duration > 0 &&
+      this._bufferService?.msIsOpened &&
+      !this._bufferService?.msHasOpTasks
+
+    if (!eosAllowed) {
+      return
+    }
+
+    let bInfo = this.bufferInfo()
+    if (media.paused && !media.currentTime) {
+      bInfo = this.bufferInfo(bInfo.nextStart || 0.5)
+    }
+
+    const bufferThroughout = Math.abs(bInfo.end - media.duration) < 0.1 ||
+      (!this.isLive && lastSegment && bInfo.end >= (lastSegment.start + lastSegment.duration))
+    if (bufferThroughout) {
+      this._bufferService.endOfStream()
+    }
   }
 }
 

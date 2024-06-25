@@ -45,6 +45,12 @@ export class Playlist {
     return this.currentStream?.liveEdge
   }
 
+  set liveEdge (end) {
+    if (this.currentStream) {
+      this.currentStream.liveEdge = end
+    }
+  }
+
   get totalDuration () {
     return this.currentStream?.totalDuration || 0
   }
@@ -100,6 +106,14 @@ export class Playlist {
 
   setNextSegmentByIndex (index = 0) {
     this._segmentPointer = index - 1
+  }
+
+  setNextSegmentBySN (sn = 0) {
+    const preIndex = this.currentSegments?.findIndex(x => x.sn === sn)
+    if (preIndex !== -1) {
+      this.setNextSegmentByIndex(preIndex + 1)
+    }
+    return preIndex
   }
 
   findSegmentIndexByTime (time) {
@@ -158,6 +172,14 @@ export class Playlist {
     }
   }
 
+  updateSegmentsRanges (sn, start) {
+    const segs = this.currentSegments?.filter(x => x.sn >= sn)
+    segs.forEach(s => {
+      s.start = start
+      start = s.end
+    })
+  }
+
   switchSubtitle (lang) {
     this.currentStream?.switchSubtitle(lang)
   }
@@ -194,7 +216,18 @@ export class Playlist {
     if (!next.hasAudio && !next.hasVideo) return
 
     if ((next.hasAudio !== seg.hasAudio || next.hasVideo !== seg.hasVideo)) return next
+  }
 
+  feedbackLiveEdge (segment, bufferEnd) {
+    const segs = this.currentSegments
+    if (!segs) return
+    const isLast = this.lastSegment?.sn === segment.sn
+    if (isLast) {
+      this.liveEdge = bufferEnd
+      return
+    }
+
+    this.updateSegmentsRanges(segment.sn + 1, bufferEnd)
   }
 
 }

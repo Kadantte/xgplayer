@@ -78,8 +78,8 @@ export default class PlaybackRate extends OptionsIcon {
     super.show()
   }
 
-  onItemClick (e, data) {
-    super.onItemClick(...arguments)
+  onItemClick (e, _data) {
+    super.onItemClick(e, _data)
     const target = e.delegateTarget
     const rate = Number(target.getAttribute('rate'))
     if (!rate || rate === this.curValue) {

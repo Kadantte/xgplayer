@@ -1,6 +1,7 @@
 import { AudioCodecType, VideoCodecType } from '../model'
-import { getAvcCodec, readBig16, readBig24, readBig32, readBig64 } from '../utils'
+import { getAvcCodec, readBig16, readBig24, readBig32, readBig64, combineToFloat, toDegree } from '../utils'
 import { AAC } from '../codec'
+import { ByteReader } from '../utils/byte-reader'
 export class MP4Parser {
   static findBox (data, names, start = 0) {
     const ret = []
@@ -147,18 +148,36 @@ export class MP4Parser {
 
   static tkhd (box) {
     return parseBox(box, true, (ret, data) => {
-      let start = 0
+      const byte = ByteReader.fromUint8(data)
       if (ret.version === 1) {
-        ret.trackId = readBig32(data, 16)
-        ret.duration = readBig64(data, 24)
-        start += 32
+        byte.read(8) // createTime
+        byte.read(8) // modifyTime
+        ret.trackId = byte.read(4)
+        byte.read(4)
+        ret.duration = byte.read(8)
       } else {
-        ret.trackId = readBig32(data, 8)
-        ret.duration = readBig32(data, 16)
-        start += 20
+        byte.read(4) // createTime
+        byte.read(4) // modifyTime
+        ret.trackId = byte.read(4)
+        byte.read(4)
+        ret.duration = byte.read(4)
       }
-      ret.width = readBig32(data, start + 52)
-      ret.height = readBig32(data, start + 56)
+      byte.skip(16) // reserved(8) + layer(2) + alternateGroup(2) + volume(2) + reserved(2)
+      ret.matrix = [] // for remux
+      for (let i = 0; i < 36; i++) {
+        ret.matrix.push(byte.read(1))
+      }
+      byte.back(36)
+      const caculatedMatrix = [] // for caculation of rotation
+      for (let i = 0, int32; i < 3; i++) {
+        caculatedMatrix.push(combineToFloat(byte.readInt(2), byte.readInt(2))) // 16.16 fixed point
+        caculatedMatrix.push(combineToFloat(byte.readInt(2), byte.readInt(2))) // 16.16 fixed point
+        int32 = byte.readInt(4)
+        caculatedMatrix.push(combineToFloat(int32 >> 30, int32 & 0x3fffffff)) //  2.30 fixed point
+      }
+      ret.rotation = toDegree(caculatedMatrix)
+      ret.width = byte.read(4) // 16.16 fixed point, no parsed
+      ret.height = byte.read(4) // 16.16 fixed point, no parsed
     })
   }
 
@@ -390,6 +409,7 @@ export class MP4Parser {
 
   static avcC (box) {
     return parseBox(box, false, (ret, data) => {
+      ret.data = box.data
       ret.configurationVersion = data[0]
       ret.AVCProfileIndication = data[1]
       ret.profileCompatibility = data[2]
@@ -766,6 +786,8 @@ export class MP4Parser {
       v.mvhdTimecale = moov.mvhd.timescale
       v.timescale = v.formatTimescale = vTrack.mdia.mdhd.timescale
       v.duration = vTrack.mdia.mdhd.duration || (v.mvhdDurtion / v.mvhdTimecale * v.timescale)
+      v.rotation = vTrack.tkhd.rotation
+      v.matrix = vTrack.tkhd.matrix
       const e1 = vTrack.mdia.minf.stbl.stsd.entries[0]
       v.width = e1.width
       v.height = e1.height

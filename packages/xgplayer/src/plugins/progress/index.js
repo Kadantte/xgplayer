@@ -308,17 +308,13 @@ class Progress extends Plugin {
   }
 
   bindDomEvents () {
-    const { controls, config } = this.player
+    const { config } = this.player
     this._mouseDownHandlerHook = this.hook('dragstart', this._mouseDownHandler)
     this._mouseUpHandlerHook = this.hook('dragend', this._mouseUpHandler)
     this._mouseMoveHandlerHook = this.hook('drag', this._mouseMoveHandler)
 
     if (this.domEventType === 'touch' || this.domEventType === 'compatible') {
       this.root.addEventListener('touchstart', this.onMouseDown)
-      if (controls) {
-        controls.root && controls.root.addEventListener('touchmove', Util.stopPropagation)
-        controls.center && controls.center.addEventListener('touchend', Util.stopPropagation)
-      }
     }
 
     if (this.domEventType === 'mouse' || this.domEventType === 'compatible') {
@@ -450,6 +446,7 @@ class Progress extends Plugin {
     if (eventType === 'touchstart') {
       this.root.addEventListener('touchmove', this.onMouseMove)
       this.root.addEventListener('touchend', this.onMouseUp)
+      this.root.addEventListener('touchcancel', this.onMouseUp)
     } else {
       this.unbind('mousemove', this.onMoveOnly)
 
@@ -488,9 +485,10 @@ class Progress extends Plugin {
     _state.prePlayTime = 0
     _state.time = 0
     const eventType = e.type
-    if (eventType === 'touchend') {
+    if (eventType === 'touchend' || eventType === 'touchcancel') {
       this.root.removeEventListener('touchmove', this.onMouseMove)
       this.root.removeEventListener('touchend', this.onMouseUp)
+      this.root.removeEventListener('touchcancel', this.onMouseUp)
       // 交互结束 恢复控制栏的隐藏流程
       this.blur()
     } else {
@@ -505,7 +503,7 @@ class Progress extends Plugin {
     // 延迟复位，状态复位要在dom相关时间回调执行之后
     Util.setTimeout(this, () => {
       this.resetSeekState()
-    }, 10)
+    }, 1)
     // 交互结束 恢复控制栏的隐藏流程
     player.focus()
   }
@@ -714,7 +712,6 @@ class Progress extends Plugin {
 
   destroy () {
     const { player } = this
-    const { controls } = player
     this.thumbnailPlugin = null
     this.innerList.destroy()
     this.innerList = null
@@ -723,10 +720,7 @@ class Progress extends Plugin {
       this.root.removeEventListener('touchstart', this.onMouseDown)
       this.root.removeEventListener('touchmove', this.onMouseMove)
       this.root.removeEventListener('touchend', this.onMouseUp)
-      if (controls) {
-        controls.root && controls.root.removeEventListener('touchmove', Util.stopPropagation)
-        controls.center && controls.center.removeEventListener('touchend', Util.stopPropagation)
-      }
+      this.root.removeEventListener('touchcancel', this.onMouseUp)
     }
     if (domEventType === 'mouse' || domEventType === 'compatible') {
       this.unbind('mousedown', this.onMouseDown)
