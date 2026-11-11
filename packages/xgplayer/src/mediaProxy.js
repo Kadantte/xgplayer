@@ -26,6 +26,9 @@ import { URL_CHANGE, WAITING, VIDEO_EVENTS, SOURCE_ERROR, SOURCE_SUCCESS } from 
  *   pause: Function,
  * } } IMediaProxy
  */
+/**
+ * @typedef { import ('./defaultConfig').IPlayerOptions } IPlayerOptions
+ */
 
 function emitVideoEvent (eventKey, e) {
   if (!this || !this.emit) {
@@ -103,6 +106,9 @@ function getVideoEventHandler (eventKey, player) {
  * @extends { EventEmitter }
  */
 class MediaProxy extends EventEmitter {
+  /**
+   * @param { IPlayerOptions } options
+   */
   constructor (options) {
     super(options)
     /**
@@ -185,7 +191,12 @@ class MediaProxy extends EventEmitter {
     /**
      * @type { HTMLVideoElement | HTMLAudioElement | HTMLElement | IMediaProxy | null }
      */
-    this.media = Util.createDom(this.mediaConfig.mediaType, '', this.mediaConfig, '')
+    this.media =
+      options.mediaEl instanceof HTMLMediaElement
+        ? options.mediaEl
+        : typeof options.mediaEl === 'function'
+          ? options.mediaEl(this.mediaConfig)
+          : Util.createDom(this.mediaConfig.mediaType, '', this.mediaConfig, '')
 
     if (options.defaultPlaybackRate) {
       this.media.defaultPlaybackRate = this.media.playbackRate = options.defaultPlaybackRate
@@ -201,6 +212,11 @@ class MediaProxy extends EventEmitter {
     }
     if (options.autoplay) {
       this.media.autoplay = true
+    }
+
+    // Warning：一些移动端浏览器（Like Vivo）需要直接设置JS属性，否则会导致失效
+    if (options.playsinline) {
+      this.media.playsinline = true
     }
 
     /**
@@ -283,36 +299,28 @@ class MediaProxy extends EventEmitter {
   }
 
   /**
-   * 针对source列表播放方式添加错误监听
-   * @doc https://stackoverflow.com/questions/47557135/html5-detect-the-type-of-error-when-trying-to-load-a-video-using-a-source-elem
-   * @protected
-   * @param { HTMLVideoElement | HTMLAudioElement } video
-   * @param { Array<{src: string, type: string }>} urls
+   * @description Assemble source elements for the media element,
+   *  and add error event listeners to each source element
+   * @public
    */
-  _attachSourceEvents (video, urls) {
-    video.removeAttribute('src')
-    video.load()
+  assembleSource (urls, mediaEl) {
+    const media = mediaEl || this.media || this.video;
     urls.forEach((item, index) => {
-      this.media.appendChild(Util.createDom('source', '', {
+      media.appendChild(Util.createDom('source', '', {
         src: `${item.src}`,
         type: `${item.type || ''}`,
         'data-index': index + 1
       }))
     })
-    const _c = video.children
-    if (!_c) {
-      return
-    }
+
+    const _c = media.children
+
     /**
      * @private
      */
     this._videoSourceCount = _c.length
 
     this._videoSourceIndex = _c.length
-
-    this._vLoadeddata = (e) => {
-      this.emit(SOURCE_SUCCESS, { src: e.target.currentSrc, host: Util.getHostFromUrl(e.target.currentSrc) })
-    }
 
     /**
      * @private
@@ -325,6 +333,7 @@ class MediaProxy extends EventEmitter {
         break
       }
     }
+
     // safari有些版本不是所有source都请求，导致单独使用_videoSourceIndex计算会报错
     !this._sourceError && (this._sourceError = (e) => {
       const _dIndex = parseInt(e.target.getAttribute('data-index'), 10)
@@ -345,6 +354,48 @@ class MediaProxy extends EventEmitter {
     for (let i = 0; i < _c.length; i++) {
       _c[i].addEventListener('error', this._sourceError)
     }
+  }
+
+  /**
+   * @description disassemble source elements for the media element
+   * @public
+   */
+  disassembleSource (mediaEl) {
+    const media = mediaEl || this.media || this.video;
+    const _c = media.children
+    if (!_c || _c.length === 0 || !this._sourceError) {
+      return
+    }
+    for (let i = 0; i < _c.length; i++) {
+      _c[i].removeEventListener('error', this._sourceError)
+    }
+    while (_c.length > 0) {
+      media.removeChild(_c[0])
+    }
+  }
+
+  /**
+   * 针对source列表播放方式添加错误监听
+   * @doc https://stackoverflow.com/questions/47557135/html5-detect-the-type-of-error-when-trying-to-load-a-video-using-a-source-elem
+   * @protected
+   * @param { HTMLVideoElement | HTMLAudioElement } video
+   * @param { Array<{src: string, type: string }>} urls
+   */
+  _attachSourceEvents (video, urls) {
+    video.removeAttribute('src')
+    video.load()
+
+    this.assembleSource(urls, video)
+
+    const _c = video.children
+    if (!_c) {
+      return
+    }
+
+    this._vLoadeddata = (e) => {
+      this.emit(SOURCE_SUCCESS, { src: e.target.currentSrc, host: Util.getHostFromUrl(e.target.currentSrc) })
+    }
+
     video.addEventListener('loadeddata', this._vLoadeddata)
   }
 
@@ -354,16 +405,7 @@ class MediaProxy extends EventEmitter {
    * @param { HTMLVideoElement | HTMLAudioElement } video
    */
   _detachSourceEvents (video) {
-    const _c = video.children
-    if (!_c || _c.length === 0 || !this._sourceError) {
-      return
-    }
-    for (let i = 0; i < _c.length; i++) {
-      _c[i].removeEventListener('error', this._sourceError)
-    }
-    while (_c.length > 0) {
-      video.removeChild(_c[0])
-    }
+    this.disassembleSource(video)
     this._vLoadeddata && video.removeEventListener('loadeddata', this._vLoadeddata)
   }
 
@@ -376,7 +418,7 @@ class MediaProxy extends EventEmitter {
       let _e = this.media.error || error
       const type = _e.code ? ERROR_TYPE_MAP[_e.code] : 'other'
       let message = _e.message
-      if (!this.media.currentSrc) {
+      if (!(this.media.currentSrc || this.media.srcObject)) {
         message = 'empty_src'
         _e = {
           code: 6,
@@ -803,7 +845,6 @@ class MediaProxy extends EventEmitter {
   /** ******************* 以下api只有申明作用,具体实现依赖EventEmitter ******************/
 
   /**
-   *
    * @param { string } event
    * @param { any } [data]
    * @returns
@@ -813,9 +854,8 @@ class MediaProxy extends EventEmitter {
   }
 
   /**
-   *
    * @param { string } event
-   * @param { (data?: any) => any } callback
+   * @param { (...args: any[]) => any } callback
    * @returns
    */
   on (event, callback, ...args) {
@@ -823,9 +863,8 @@ class MediaProxy extends EventEmitter {
   }
 
   /**
-   *
    * @param { string } event
-   * @param { (data?: any) => any } callback
+   * @param { (...args: any[]) => any } callback
    * @returns
    */
   once (event, callback, ...args) {
@@ -835,7 +874,7 @@ class MediaProxy extends EventEmitter {
   /**
    *
    * @param { string } event
-   * @param { (data?: any) => any } callback
+   * @param { (...args: any[]) => any } callback
    * @returns
    */
   off (event, callback, ...args) {

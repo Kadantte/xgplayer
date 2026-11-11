@@ -1,6 +1,6 @@
 {
   "name": "xgplayer-shaka",
-  "version": "3.0.15",
+  "version": "3.0.27",
   "description": "xgplayer plugin for shaka-player",
   "main": "dist/index.min.js",
   "module": "es/index.js",
@@ -10,7 +10,8 @@
   },
   "files": [
     "dist",
-    "es"
+    "es",
+    "CHANGELOG.md"
   ],
   "publishConfig": {
     "registry": "https://registry.npmjs.org/",
@@ -25,8 +26,10 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/bytedance/xgplayer.git"
+    "url": "git+https://github.com/bytedance/xgplayer.git",
+    "directory": "packages/xgplayer-shaka"
   },
+  "homepage": "https://h5player.bytedance.com/",
   "unpkgFiles": [
     "dist"
   ],

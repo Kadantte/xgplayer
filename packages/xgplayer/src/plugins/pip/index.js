@@ -228,6 +228,7 @@ class PIP extends IconPlugin {
 
           // Listen for the PiP closing event to put the video back.
           pipWin.addEventListener('pagehide', (event) => {
+            player.plugins?.progress?.resetDragState?.()
             // Restore nodes to their original location
             if (parentNode) {
               if (nextSibling) {
@@ -295,7 +296,7 @@ class PIP extends IconPlugin {
 
   isPIPAvailable () {
     const video = this.player.media
-    const _isEnabled = Util.typeOf(document.pictureInPictureEnabled) === 'Boolean' ? document.pictureInPictureEnabled : true
+    const _isEnabled = Util.typeOf(document.pictureInPictureEnabled) === 'Boolean' ? document.pictureInPictureEnabled : false
     return _isEnabled &&
     ((Util.typeOf(video.disablePictureInPicture) === 'Boolean' && !video.disablePictureInPicture) ||
      (video.webkitSupportsPresentationMode && Util.typeOf(video.webkitSetPresentationMode) === 'Function')) ||

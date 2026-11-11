@@ -6,10 +6,12 @@ import { isPlainObject } from '../is'
 import { sleep } from '../streaming-helper'
 import { EVENT } from '../event'
 import EventEmitter from 'eventemitter3'
+import { getSharedDynamicTimeoutIns } from './dynamic-timeout'
 
 export {
   LoaderType,
-  ResponseType
+  ResponseType,
+  getSharedDynamicTimeoutIns
 }
 
 export class NetLoader extends EventEmitter {
@@ -45,6 +47,7 @@ export class NetLoader extends EventEmitter {
     return FetchLoader.isSupported()
   }
 
+  /** @returns {Promise<any>} */
   load (url, config = {}) {
     if (typeof url === 'string' || !url) {
       config.url = url || config.url || this._config.url
@@ -62,10 +65,14 @@ export class NetLoader extends EventEmitter {
       config = config.transformRequest(config) || config
     }
     config.logger = this.log
+    config.dynamicTimeoutIns = this._config.dynamicTimeoutIns
 
     const task = new Task(this.type, config)
     task.loader.on(EVENT.REAL_TIME_SPEED, (data) => {
       this.emit(EVENT.REAL_TIME_SPEED, data)
+    })
+    task.on('networkError', (err) => {
+      this.emit('networkError', err)
     })
     this._queue.push(task)
     if (this._queue.length === 1 && (!this._currentTask || !this._currentTask.running)) {

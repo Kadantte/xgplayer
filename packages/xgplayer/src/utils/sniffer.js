@@ -18,7 +18,8 @@
  *   isPc: boolean,
  *   isSymbian: boolean,
  *   isWindowsPhone: boolean,
- *   isFireFox: boolean
+ *   isFireFox: boolean,
+ *   isHarmonyOS: boolean
  *  },
  *  isWeixin: boolean,
  *  isSupportMP4(): ICheckResult,
@@ -29,6 +30,7 @@
 
 const VERSION_REG = {
   android: /(Android)\s([\d.]+)/,
+  harmony: /(OpenHarmony|HarmonyOS)\s([\d.]+)/,
   ios: /(Version)\/([\d.]+)/
 }
 
@@ -39,10 +41,6 @@ const H264_MIMETYPES = [
   'avc1.64001E, mp4a.40.2',
   'avc1.42E01E',
   'mp4v.20.8',
-  'avc1.42E01E, mp4a.40.2',
-  'avc1.58A01E, mp4a.40.2',
-  'avc1.4D401E, mp4a.40.2',
-  'avc1.64001E, mp4a.40.2',
   'mp4v.20.8, mp4a.40.2',
   'mp4v.20.240, mp4a.40.2'
 ]
@@ -68,7 +66,7 @@ const sniffer = {
       opera: /opera.([\d.]+)/,
       safari: /version\/([\d.]+).*safari/
     }
-    return [].concat(Object.keys(reg).filter(key => reg[key].test(ua)))[0]
+    return [].concat(Object.keys(reg).filter(key => reg[key].test(ua)))[0] || ''
   },
   get os () {
     if (typeof navigator === 'undefined') {
@@ -77,14 +75,17 @@ const sniffer = {
     const ua = navigator.userAgent
     const isWindowsPhone = /(?:Windows Phone)/.test(ua)
     const isSymbian = /(?:SymbianOS)/.test(ua) || isWindowsPhone
+    const isTizen = /(?:Tizen)/ig.test(ua) // Samsung Tizen TV
+    const isWebOS = /(?:Web0S)/ig.test(ua) // LG TV
+    const isHarmonyOS = /(?:OpenHarmony|HarmonyOS)/i.test(ua)
     const isAndroid = /(?:Android)/.test(ua)
     const isFireFox = /(?:Firefox)/.test(ua)
     const isIpad = /(?:iPad|PlayBook)/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
     const isTablet =
       isIpad ||
       (isAndroid && !/(?:Mobile)/.test(ua)) ||
-      (isFireFox && /(?:Tablet)/.test(ua))
-    const isPhone = /(?:iPhone)/.test(ua) && !isTablet
+      ((isHarmonyOS || isFireFox) && /(?:Tablet)/.test(ua))
+    const isPhone = /(?:Phone)/.test(ua) /* iPhone or HarmonyOS Phone */ && !isTablet
     const isPc = !isPhone && !isAndroid && !isSymbian && !isTablet
     return {
       isTablet,
@@ -95,7 +96,10 @@ const sniffer = {
       isPc,
       isSymbian,
       isWindowsPhone,
-      isFireFox
+      isFireFox,
+      isHarmonyOS,
+      isTizen,
+      isWebOS
     }
   },
 
@@ -105,11 +109,14 @@ const sniffer = {
     }
     const ua = navigator.userAgent
     let reg = ''
-    // ios
     if (/(?:iPhone)|(?:iPad|PlayBook)/.test(ua)) {
+      // ios
       reg = VERSION_REG.ios
-      // android
+    } else if (/(?:OpenHarmony|HarmonyOS)/i.test(ua)) {
+      // harmony os
+      reg = VERSION_REG.harmony
     } else {
+      // android
       reg = VERSION_REG.android
     }
     const _match = reg ? reg.exec(ua) : []

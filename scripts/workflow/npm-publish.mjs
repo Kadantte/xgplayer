@@ -1,30 +1,8 @@
-import { Configuration, Project, Workspace } from '@yarnpkg/core';
-import { npath } from '@yarnpkg/fslib';
-import blockList from './block-list.mjs';
-(async function main() { 
-    const getConfiguration = (p) => {
-        return Configuration.create(p, p, new Map([]));
-    };
+import { createRequire } from 'node:module'
 
-    const portablePath = npath.toPortablePath(path.resolve(process.cwd()))
-    const configuration = await getConfiguration(portablePath);
-    const { project } = await Project.find(configuration, portablePath);
+const require = createRequire(import.meta.url)
+const { publishRelease } = require('./release-archives')
+const archiveDir = process.argv[2]
+if (!archiveDir) throw new Error('A directory containing release archives is required')
 
-
-    const workspace = new Workspace(portablePath, { project });
-    await workspace.setup();
-
-    let packages = workspace.getRecursiveWorkspaceChildren().filter(pkg => !blockList.includes(pkg.manifest.raw.name))
-    await Promise.all(packages.map((pkg) => {
-        const pkgName = pkg.manifest.raw.name
-        const prom = $`yarn workspace ${pkgName} exec npm publish`
-        return prom
-            .then(() => {
-                console.log(pkgName, ' is successfully published')
-            })
-            .catch((e) => {
-                console.error(pkgName, ' is failed to publish, reason: ', e.message)
-            })
-    }))
-})()
-
+await publishRelease({ archiveDir })

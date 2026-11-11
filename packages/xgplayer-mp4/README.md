@@ -1,62 +1,59 @@
 # xgplayer-mp4
 
-## 简介
+`xgplayer-mp4` is an MSE streaming plugin for xgplayer that provides segmented
+MP4 loading and buffer control.
 
-xgplayer-mp4模块基于MSE方式实现mp4的播放控制。
+## Installation
 
-### MP4播放
-
-```javascript
-import Player from "xgplayer"
-import Mp4Plugin from "xgplayer-mp4"
-import "xgplayer/dist/xgplayer.min.css"
-
-
-
-const player = new Player({
-    url,
-    id,
-    autoplay: true,
-    height: window.innerHeight,
-    width: window.innerWidth,
-    plugins: [Mp4Plugin],
-    mp4plugin: {
-      maxBufferLength: 30,
-      minBufferLength: 10, 
-      reqOptions:{
-        mode: 'cors',
-        method: 'POST',
-        headers: { // 需要带的自定义请求头
-          'x-test-header': 'rrrr'
-        },
-      }  
-      // ... 其他配置
-    }
-})
-
-player.on('canplay', ()=>{
-    // do something
-})
-
+```bash
+npm install xgplayer xgplayer-mp4
 ```
 
+## Usage
 
-可配置的能力
+```js
+import Player from 'xgplayer'
+import Mp4Plugin from 'xgplayer-mp4'
+import 'xgplayer/dist/index.min.css'
 
-| 配置字段 | 默认值 | 含义 |
-| ------ | -------- | ----- |
-| maxBufferLength | 40 | 播放的最大的buffer长度（s） |
-| minBufferLength | 5 |  播放的最小的buffer长度（s）|
-| disableBufferBreakCheck | false | 是否开启卡顿超时检测 |
-| waitingTimeOut | 15s | 卡顿超时时间 |
-| waitingInBufferTimeOut | 5s | 在buffer区间内的卡顿超时时间 |
-| waitJampBufferMaxCnt | 3 | 一次播放中在buffer区间内卡顿超时最多可以seek调整几次 |
-| chunkSize | 15625 | 第一次请求的数据的size长度 |
-| tickInSeconds | 0.1 | 驱动下载的timer的时间间隔 |
-| segmentDuration | 5s | 一次下载数据的最小视频时长|
-| onProcessMinLen | 1024 | fetch每次回调数据的最小长度|
-| retryCount | 2 | loader请求失败时的重试次数 |
-| retryDelay | 1000 | 重试的时间间隔（ms） |
-| timeout | 3000 | loader请求的超时时间(ms) |
-| enableWorker | false | transmux是否使用worker|
+const player = new Player({
+  id: 'player',
+  url: 'https://example.com/video.mp4',
+  plugins: [Mp4Plugin],
+  mp4: {
+    maxBufferLength: 30,
+    minBufferLength: 10,
+    reqOptions: {
+      headers: {
+        'x-test-header': 'value'
+      }
+    }
+  }
+})
+```
 
+## Options
+
+| Option | Default | Description |
+| --- | ---: | --- |
+| `maxBufferLength` | `40` | Target forward buffer while playing, in seconds |
+| `minBufferLength` | `5` | Target forward buffer while paused, in seconds |
+| `bufferBehind` | `10` | Buffered history retained behind the current time, in seconds |
+| `tickInterval` | `500` | Download scheduling interval, in milliseconds |
+| `segmentDuration` | `undefined` | Target duration for each downloaded segment, in seconds |
+| `onProcessMinLen` | `1024` | Minimum streamed chunk size passed to the loader callback |
+| `retry` | `3` | Number of request retries |
+| `retryDelay` | `1000` | Retry delay, in milliseconds |
+| `timeout` | `3000` | Request timeout, in milliseconds |
+| `reqOptions` | `null` | Request headers, credentials, and other loader options |
+| `disableBufferBreakCheck` | `false` | Disable stalled-stream recovery |
+| `waitingTimeOut` | `15000` | Timeout before an out-of-buffer stall is treated as fatal |
+| `waitingInBufferTimeOut` | `5000` | Delay before in-buffer seek recovery |
+| `waitJampBufferMaxCnt` | `3` | Maximum in-buffer seek recovery attempts |
+| `closeDowngrade` | `false` | Disable fallback to native video after a fatal plugin error |
+| `preferMMS` | `false` | Prefer `ManagedMediaSource` when available |
+| `mseAttachMode` | `'auto'` | MediaSource attachment mode: `auto`, `src`, or `source-element` |
+| `enableWorker` | `false` | Run transmuxing in a Worker when available |
+
+When fallback is enabled, fatal initialization and runtime errors emit
+`playCatch` with `MP4_1` or `MP4_2`, then restore the native video source.

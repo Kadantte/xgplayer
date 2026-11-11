@@ -1,0 +1,51 @@
+{
+  "name": "xgplayer-mp3",
+  "version": "3.0.27",
+  "description": "xgplayer streaming plugin for standalone MP3 files",
+  "main": "dist/index.min.js",
+  "module": "es/index.js",
+  "typings": "es/index.d.ts",
+  "sideEffects": false,
+  "libd": {
+    "umdName": "Mp3Plugin"
+  },
+  "files": [
+    "dist",
+    "es",
+    "docs",
+    "README.md",
+    "README.zh-CN.md",
+    "CHANGELOG.md"
+  ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public",
+    "tag": "latest"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bytedance/xgplayer.git",
+    "directory": "packages/xgplayer-mp3"
+  },
+  "homepage": "https://h5player.bytedance.com/",
+  "keywords": [
+    "mp3",
+    "mpeg-audio",
+    "mse",
+    "player",
+    "audio"
+  ],
+  "unpkgFiles": [
+    "dist"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "eventemitter3": "^4.0.7",
+    "xgplayer-streaming-shared": "3.0.27",
+    "xgplayer-transmuxer": "3.0.27"
+  },
+  "peerDependencies": {
+    "xgplayer": ">=3.0.0",
+    "core-js": ">=3.12.1"
+  }
+}

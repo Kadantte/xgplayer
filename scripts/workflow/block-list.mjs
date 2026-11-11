@@ -1,1 +1,0 @@
-export default ["xgplayer-mp4-new"];

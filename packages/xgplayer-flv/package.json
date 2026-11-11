@@ -1,6 +1,6 @@
 {
   "name": "xgplayer-flv",
-  "version": "3.0.15",
+  "version": "3.0.27",
   "main": "dist/index.min.js",
   "module": "es/index.js",
   "typings": "es/index.d.ts",
@@ -10,21 +10,28 @@
   },
   "files": [
     "dist",
-    "es"
+    "es",
+    "CHANGELOG.md"
   ],
   "publishConfig": {
     "registry": "https://registry.npmjs.org/",
     "access": "public",
     "tag": "latest"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bytedance/xgplayer.git",
+    "directory": "packages/xgplayer-flv"
+  },
+  "homepage": "https://h5player.bytedance.com/",
   "license": "MIT",
   "unpkgFiles": [
     "dist"
   ],
   "dependencies": {
     "eventemitter3": "^4.0.7",
-    "xgplayer-transmuxer": "3.0.15",
-    "xgplayer-streaming-shared": "3.0.15"
+    "xgplayer-transmuxer": "3.0.27",
+    "xgplayer-streaming-shared": "3.0.27"
   },
   "peerDependencies": {
     "xgplayer": ">=3.0.1",

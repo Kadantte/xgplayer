@@ -117,15 +117,16 @@ class Danmu extends Plugin {
         this.intervalId = null
       }
       const now = window.performance.now()
-      if (now - this.seekCost > MIN_INTERVAL) {
+      const delayTime = now - this.seekCost > MIN_INTERVAL ? 100 : MIN_INTERVAL
+
+      this.intervalId = Util.setTimeout(this, () => {
         this.danmujs.start()
-      } else {
-        this.intervalId = Util.setTimeout(this, () => {
-          this.danmujs.start()
-          // clearTimeout(this.intervalId)
-          this.intervalId = null
-        }, MIN_INTERVAL)
-      }
+        this.intervalId = null
+
+        if (this.player.paused) {
+          this.danmujs.pause()
+        }
+      }, delayTime)
     })
   }
 
@@ -167,7 +168,7 @@ class Danmu extends Plugin {
 
   registerExtIcons () {
     const { player, config } = this
-    if (config.panel) {
+    if (config.panel && player.controls) {
       const panelOptions = {
         config: {
           onChangeset: (set) => {
@@ -178,7 +179,7 @@ class Danmu extends Plugin {
       this.danmuPanel = player.controls.registerPlugin(DanmuPanel, panelOptions, DanmuPanel.pluginName)
     }
     const { switchConfig } = config
-    if (!config.closeDefaultBtn) {
+    if (!config.closeDefaultBtn && player.controls) {
       const buttonOptions = {
         config: {
           onSwitch: (event, isOpen) => {

@@ -1,6 +1,6 @@
 {
   "name": "xgplayer-music",
-  "version": "3.0.15",
+  "version": "3.0.27",
   "description": "xgplayer plugin for music",
   "main": "dist/index.min.js",
   "module": "es/index.js",
@@ -28,8 +28,10 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git@github.com:bytedance/xgplayer.git"
+    "url": "git+https://github.com/bytedance/xgplayer.git",
+    "directory": "packages/xgplayer-music"
   },
+  "homepage": "https://h5player.bytedance.com/",
   "keywords": [
     "mp4",
     "fmp4",
@@ -43,7 +45,7 @@
     "eventemitter3": "^4.0.7"
   },
   "peerDependencies": {
-    "xgplayer": "3.0.15",
+    "xgplayer": "3.0.27",
     "core-js": ">=3.12.1"
   }
 }

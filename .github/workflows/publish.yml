@@ -1,162 +1,250 @@
-# This workflow will do a clean installation of node dependencies, cache/restore them, build the source code and run tests across different versions of node
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-nodejs
-
 name: Release Version
+run-name: Release ${{ github.ref_name }}
 
 on:
   push:
-    branches: ["main"]
     tags: ["v*"]
+
+permissions:
+  contents: read
+
 jobs:
-  build:
+  prepare_release:
+    name: Prepare release metadata
+    if: github.repository == 'bytedance/xgplayer'
     runs-on: ubuntu-latest
-    environment: release
+    outputs:
+      tag: ${{ steps.prepare.outputs.tag }}
+      version: ${{ steps.prepare.outputs.version }}
+      is_stable: ${{ steps.prepare.outputs.is_stable }}
+      npm_tag: ${{ steps.prepare.outputs.npm_tag }}
+      source_sha: ${{ steps.prepare.outputs.source_sha }}
+      from_tag: ${{ steps.prepare.outputs.from_tag }}
     steps:
-      - name: extract tag
-        id: extract_tag
-        uses: actions/github-script@v6
+      - name: Checkout release tag and history
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+
+      - name: Prepare version, changelogs and release notes
+        id: prepare
+        run: node scripts/workflow/release-metadata.js prepare "$RUNNER_TEMP/release-metadata"
+        env:
+          TAG: ${{ github.ref_name }}
+
+      - name: Upload release metadata
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-metadata
+          path: ${{ runner.temp }}/release-metadata/
+          if-no-files-found: error
+          retention-days: 7
+
+  build:
+    name: Build and pack release
+    needs: prepare_release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fixed release source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare_release.outputs.source_sha }}
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+
+      - name: Download release metadata
+        uses: actions/download-artifact@v7
+        with:
+          name: release-metadata
+          path: ${{ runner.temp }}/release-metadata
+
+      - name: Apply prepared metadata
+        run: |
+          PATCH="$RUNNER_TEMP/release-metadata/metadata.patch"
+          if [ -s "$PATCH" ]; then
+            git apply --check "$PATCH"
+            git apply "$PATCH"
+          fi
+
+      - name: Build packages
+        run: yarn build:all
+
+      - name: Pack and verify release archives
+        run: |
+          node scripts/workflow/release-archives.js \
+            "$RUNNER_TEMP/release-metadata" "$RUNNER_TEMP/release-archives"
+
+      - name: Upload release archives
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-archives
+          path: ${{ runner.temp }}/release-archives/
+          if-no-files-found: error
+          retention-days: 7
+
+  commit_to_main:
+    name: Commit stable release metadata
+    if: needs.prepare_release.outputs.is_stable == 'true'
+    needs: [prepare_release, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    concurrency:
+      group: release-main-metadata
+      cancel-in-progress: false
+    steps:
+      - name: Create release App token
+        id: release-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+
+      - name: Checkout fixed release source
+        uses: actions/checkout@v6
+        with:
+          token: ${{ steps.release-token.outputs.token }}
+          ref: ${{ needs.prepare_release.outputs.source_sha }}
+          fetch-depth: 0
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+
+      - name: Download release metadata
+        uses: actions/download-artifact@v7
+        with:
+          name: release-metadata
+          path: ${{ runner.temp }}/release-metadata
+
+      - name: Apply prepared metadata to latest main
+        run: node scripts/workflow/release-metadata.js apply "$RUNNER_TEMP/release-metadata"
+
+      - name: Commit and push release metadata
+        run: |
+          git config user.name "xgplayer-release-bot[bot]"
+          git config user.email "349736173+xgplayer-release-bot[bot]@users.noreply.github.com"
+          if ! git diff --cached --quiet; then
+            git -c core.hooksPath=/dev/null commit -m "chore(release): release version $TAG"
+            git push origin HEAD:main
+          fi
+        env:
+          TAG: ${{ needs.prepare_release.outputs.tag }}
+
+  release_npm:
+    name: Publish npm archives
+    if: >-
+      !cancelled() &&
+      needs.prepare_release.result == 'success' &&
+      needs.build.result == 'success' &&
+      ((needs.prepare_release.outputs.is_stable == 'true' && needs.commit_to_main.result == 'success') ||
+       (needs.prepare_release.outputs.is_stable == 'false' && needs.commit_to_main.result == 'skipped'))
+    needs: [prepare_release, build, commit_to_main]
+    environment: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout fixed release source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare_release.outputs.source_sha }}
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Download verified release archives
+        uses: actions/download-artifact@v7
+        with:
+          name: release-archives
+          path: ${{ runner.temp }}/release-archives
+
+      - name: Publish to npm
+        run: node scripts/workflow/npm-publish.mjs "$RUNNER_TEMP/release-archives"
+        env:
+          NPM_CONFIG_PROVENANCE: true
+
+  release_github:
+    name: Publish GitHub Release
+    if: >-
+      !cancelled() &&
+      needs.prepare_release.result == 'success' &&
+      needs.release_npm.result == 'success'
+    needs: [prepare_release, release_npm]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout fixed release source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare_release.outputs.source_sha }}
+
+      - name: Download release metadata
+        uses: actions/download-artifact@v7
+        with:
+          name: release-metadata
+          path: ${{ runner.temp }}/release-metadata
+
+      - name: Create or update GitHub Release
+        uses: actions/github-script@v8
+        env:
+          TAG: ${{ needs.prepare_release.outputs.tag }}
+          IS_STABLE: ${{ needs.prepare_release.outputs.is_stable }}
+          RELEASE_NOTES_PATH: ${{ runner.temp }}/release-metadata/release-notes.md
         with:
           script: |
-            const prefix = 'refs/tags/';
-            const ref = context.ref;
-            return ref.startsWith(prefix) ? ref.substring(prefix.length) : '';
-          result-encoding: string
-      - uses: actions/checkout@v3
-      - name: cache node_modules
-        uses: actions/cache@v3
+            const fs = require('node:fs');
+            const createGitHubRelease = require('./scripts/workflow/create-github-release');
+            await createGitHubRelease({
+              github,
+              context,
+              core,
+              tag: process.env.TAG,
+              isStable: process.env.IS_STABLE === 'true',
+              body: fs.readFileSync(process.env.RELEASE_NOTES_PATH, 'utf8')
+            });
+
+  release_summary:
+    name: Summarize release
+    if: always() && github.repository == 'bytedance/xgplayer'
+    needs: [prepare_release, build, commit_to_main, release_npm, release_github]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate release summary
+        uses: actions/github-script@v8
         env:
-          cache-name: cache-node-modules
+          RELEASE_NEEDS: ${{ toJSON(needs) }}
+          RELEASE_TAG: ${{ github.ref_name }}
         with:
-          path: node_modules
-          key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('**/yarn.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-build-${{ env.cache-name }}-
-            ${{ runner.os }}-build-
-            ${{ runner.os }}-
-
-      - name: Use Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: 14.x
-      - name: setup global dependencies
-        run: |
-          npm install yarn -g 
-          npm install zx -g
-
-      - name: install repo dependencies
-        run: |
-          yarn install --registry="https://registry.yarnpkg.com" 
-      - name: npm version 
-        run: |
-          zx scripts/workflow/set-package-version.mjs
-        env: 
-          TAG: ${{steps.extract_tag.outputs.result}}
-      - name: build
-        run: |
-          yarn build:all 
-      - name: upload build
-        uses: actions/upload-artifact@v3
-        with:
-          name: build
-          path: |
-            packages/*/dist/**
-            packages/*/es/**
-            package.json
-  release_npm:
-      if: ${{ startsWith(github.ref, 'refs/tags/') }}
-      needs: [build]
-      environment: release
-      runs-on: ubuntu-latest
-
-      steps:
-        - name: extract tag
-          id: extract_tag
-          uses: actions/github-script@v6
-          with:
-            script: |
-              const prefix = 'refs/tags/';
-              const ref = context.ref;
-              return ref.startsWith(prefix) ? ref.substring(prefix.length) : '';
-            result-encoding: string
-        - uses: actions/checkout@v3
-          with:
-            ref: 'main'
-        - name: use Node.js
-          uses: actions/setup-node@v3
-          with:
-            node-version: 14.x
-        - name: cache node_modules
-          uses: actions/cache@v3
-          env:
-            cache-name: cache-node-modules
-          with:
-            path: node_modules
-            key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('**/yarn.lock') }}
-            restore-keys: |
-              ${{ runner.os }}-build-${{ env.cache-name }}-
-              ${{ runner.os }}-build-
-              ${{ runner.os }}-
-        - name: setup git
-          run: |
-            git config --global user.name ${{ github.actor }}
-            git config --global user.email ${{ github.actor }}@users.noreply.github.com
-            git fetch --tags
-            git pull
-        - name: setup global deps
-          run: |
-            npm install yarn -g 
-            npm install zx -g
-            
-        - name: install repo deps
-          run: |
-            yarn install --registry="https://registry.yarnpkg.com"
-        - name: download build
-          uses: actions/download-artifact@v3
-          with:
-            name: build
-        - name: npm version 
-          run: |
-            zx scripts/workflow/set-package-version.mjs
-          env: 
-            TAG: ${{steps.extract_tag.outputs.result}}
-        - name: setup npm
-          run: |
-            npm config set '//registry.npmjs.org/:_authToken' "${NPM_TOKEN}"
-
-            echo "ls -a ${{ github.workspace }}"
-            ls -a ${{ github.workspace }}
-          env:
-            CI: true
-            NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        - name: publish
-          run: |
-            zx scripts/workflow/npm-publish.mjs
-        - name: push to release branch
-          uses: EndBug/add-and-commit@v9
-          with: 
-            add: "."
-            default_author: github_actor
-            fetch: true
-            new_branch: release
-            push: '--set-upstream origin release --force'
-            message: 'Auto Publish npm version ${{steps.extract_tag.outputs.result}}'
-        - name: create PR from back to main
-          uses: actions/github-script@v6
-          env: 
-            RELEASED_VERSION: ${{steps.extract_tag.outputs.result}}
-          with: 
-            script: |
-              const owner = context.repo.owner;
-              const repo = context.repo.repo;
-              const base = "main";
-              const head = "release";
-              const title = "new version published: " + process.env.RELEASED_VERSION;
-              const body = "";
-              github.rest.pulls.create({
-                  owner,
-                  repo,
-                  base,
-                  head,
-                  title,
-                  body
-              });
+          script: |
+            const jobs = JSON.parse(process.env.RELEASE_NEEDS);
+            const release = jobs.prepare_release.outputs;
+            const rows = Object.entries(jobs).map(([name, job]) => [name, job.result]);
+            await core.summary
+              .addHeading(`Release ${process.env.RELEASE_TAG}`)
+              .addTable([
+                [{ data: 'Field', header: true }, { data: 'Value', header: true }],
+                ['Tag', process.env.RELEASE_TAG],
+                ['Source commit', release.source_sha || context.sha],
+                ['Previous tag', release.from_tag || 'unavailable'],
+                ['npm channel', release.npm_tag || 'unavailable']
+              ])
+              .addTable([
+                [{ data: 'Job', header: true }, { data: 'Result', header: true }],
+                ...rows
+              ])
+              .write();
+            const required = ['prepare_release', 'build', 'release_npm', 'release_github'];
+            if (release.is_stable === 'true') required.push('commit_to_main');
+            if (required.some(name => jobs[name].result !== 'success')) {
+              core.setFailed('Release did not complete successfully');
+            }

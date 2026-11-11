@@ -1,12 +1,24 @@
-import { BasePlugin, Events, Errors } from 'xgplayer'
-import { EVENT } from 'xgplayer-streaming-shared'
-import { Hls } from './hls'
+import { BasePlugin, Errors, Events } from 'xgplayer'
+import { EVENT, MSE } from 'xgplayer-streaming-shared'
+import { Hls, logger } from './hls'
 import { Event } from './hls/constants'
 import PluginExtension from './plugin-extension'
 
-export function parseSwitchUrlArgs (args, plugin) {
+/**
+ * @param { import('xgplayer').SwitchUrlOptions } args
+ * @param { HlsPlugin } plugin
+ * @returns
+ */
+export function parseSwitchUrlArgs(args, plugin) {
   const { player } = plugin
   const curTime = player.currentTime
+
+  /**
+   * @type {{
+   *  startTime: number
+   *  seamless?: boolean
+   * }}
+   */
   const options = {
     startTime: curTime
   }
@@ -15,9 +27,14 @@ export function parseSwitchUrlArgs (args, plugin) {
     case 'boolean':
       options.seamless = args
       break
-    case 'object':
-      Object.assign(options, args)
+    case 'object': {
+      const { currentTime, ...rest } = args
+      Object.assign(options, rest)
+      if (typeof currentTime === 'number') {
+        options.startTime = currentTime
+      }
       break
+    }
     default:
       break
   }
@@ -29,6 +46,10 @@ export class HlsPlugin extends BasePlugin {
 
   static EVENT = Event
 
+  static isStreamingPlugin = true
+
+  logger = logger
+
   /**
    * @type {Hls}
    */
@@ -36,44 +57,80 @@ export class HlsPlugin extends BasePlugin {
 
   pluginExtension = null
 
-  static get pluginName () {
+  static get pluginName() {
     return 'hls'
   }
 
-  get core () {
+  get core() {
     return this.hls
   }
 
-  get version () {
+  get version() {
     return this.hls?.version
   }
 
-  get softDecode () {
+  get softDecode() {
     const mediaType = this.player?.config?.mediaType
-    return !!mediaType && mediaType !== 'video' && mediaType !== 'audio'
+    return (
+      !!mediaType &&
+      mediaType !== 'video' &&
+      mediaType !== 'audio' &&
+      mediaType !== 'offscreen-video'
+    )
   }
 
-  beforePlayerInit () {
+  beforePlayerInit() {
     const config = this.player.config
+    const mediaElem = this.player.media || this.player.video
+    const hlsOpts = config.hls || {}
 
-    if (!config.url &&
-      // private config key
-      !config.__allowHlsEmptyUrl__) {
+    if (
+      (!config.url &&
+        // private config key
+        !config.__allowHlsEmptyUrl__) ||
+      (!this.softDecode && !hlsOpts.preferMMS && MSE.isMMSOnly())
+    ) {
       return
     }
 
     if (this.hls) this.hls.destroy()
-    this.player.switchURL = this._onSwitchURL
+
+    /**
+     * 支持被继承时，指定不可写的属性。用来实现外部 switchURL 逻辑
+     */
+    const descriptor = Object.getOwnPropertyDescriptor(this.player, 'switchURL')
+    if (!descriptor || descriptor.writable) {
+      this.player.switchURL = (url, args) => {
+        return new Promise((resolve, reject) => {
+          const { player, hls } = this
+          if (hls) {
+            const options = parseSwitchUrlArgs(args, this)
+            player.config.url = url
+            hls
+              .switchURL(url, options)
+              .then(() => resolve(true))
+              .catch(reject)
+
+            if (!options.seamless && this.player.config?.hls?.keepStatusAfterSwitch) {
+              this._keepPauseStatus()
+            }
+          } else {
+            reject()
+          }
+        })
+      }
+    }
+    const onSwitchUrl = this.player.switchURL
     this.player.handleSource = false // disable player source handle
 
-    const hlsOpts = config.hls || {}
     hlsOpts.innerDegrade = hlsOpts.innerDegrade || config.innerDegrade
-    if (hlsOpts.disconnectTime === null || hlsOpts.disconnectTime === undefined) hlsOpts.disconnectTime = 0
+    if (hlsOpts.disconnectTime === null || hlsOpts.disconnectTime === undefined)
+      hlsOpts.disconnectTime = 0
 
     this.hls = new Hls({
       softDecode: this.softDecode,
       isLive: config.isLive,
-      media: this.player.media || this.player.video,
+      media: mediaElem,
       startTime: config.startTime,
       url: config.url,
       ...hlsOpts
@@ -89,12 +146,16 @@ export class HlsPlugin extends BasePlugin {
     }
 
     if (this.softDecode) {
-      this.pluginExtension = new PluginExtension({
-        isLive: config.isLive,
-        media: this.player.video,
-        ...hlsOpts
-      }, this)
-      this.player.forceDegradeToVideo = (...args) => this.pluginExtension?.forceDegradeToVideo(...args)
+      this.pluginExtension = new PluginExtension(
+        {
+          isLive: config.isLive,
+          media: mediaElem,
+          ...hlsOpts
+        },
+        this
+      )
+      this.player.forceDegradeToVideo = (...args) =>
+        this.pluginExtension?.forceDegradeToVideo(...args)
     }
 
     if (config.isLive) {
@@ -102,8 +163,8 @@ export class HlsPlugin extends BasePlugin {
       this.player?.useHooks('replay', () => this.hls?.replay())
     }
 
+    this.on(Events.URL_CHANGE, onSwitchUrl)
     this.on(Events.SWITCH_SUBTITLE || 'switch_subtitle', this._onSwitchSubtitle)
-    this.on(Events.URL_CHANGE, this._onSwitchURL)
     this.on(Events.DESTROY, this.destroy.bind(this))
 
     this._transError()
@@ -113,6 +174,8 @@ export class HlsPlugin extends BasePlugin {
     this._transCoreEvent(EVENT.LOAD_COMPLETE)
     this._transCoreEvent(EVENT.LOAD_RETRY)
     this._transCoreEvent(EVENT.SOURCEBUFFER_CREATED)
+    this._transCoreEvent(EVENT.MEDIASOURCE_OPENED)
+    this._transCoreEvent(EVENT.APPEND_BUFFER)
     this._transCoreEvent(EVENT.REMOVE_BUFFER)
     this._transCoreEvent(EVENT.BUFFEREOS)
     this._transCoreEvent(EVENT.KEYFRAME)
@@ -133,14 +196,18 @@ export class HlsPlugin extends BasePlugin {
     this._transCoreEvent(Event.APPEND_COST)
 
     if (config.url) {
-      this.hls.load(config.url, true).catch(e => {})
+      this.hls
+        .load(config.url, {
+          reuseMse: true
+        })
+        .catch((e) => {})
     }
   }
 
   /**
    * It needs to be supported as a subclass to be inherited externally, so don't write it as an attribute here
    */
-  destroy () {
+  destroy() {
     if (this.hls) {
       this.hls.destroy()
       this.hls = null
@@ -157,7 +224,6 @@ export class HlsPlugin extends BasePlugin {
     return this.hls?.getStats()
   }
 
-
   /**
    * @param {string | boolean} [mediaType]
    * @param {string} [codec]
@@ -165,25 +231,12 @@ export class HlsPlugin extends BasePlugin {
    * - mediaType: 默认检测 MSE 对 H264 codec是否支持，传入 true 或者配置参数的mediaType的取值检测 WebAssembly是否支持
    * - codec: 暂无使用
    */
-  static isSupported (mediaType, codec) {
+  static isSupported(mediaType, codec) {
     return Hls.isSupported(mediaType, codec)
   }
 
-  _onSwitchSubtitle = ({lang}) => {
+  _onSwitchSubtitle = ({ lang }) => {
     this.hls?.switchSubtitleStream(lang)
-  }
-
-  _onSwitchURL = (url, args) => {
-    const { player, hls } = this
-    if (hls) {
-      const options = parseSwitchUrlArgs(args, this)
-      player.config.url = url
-      hls.switchURL(url, options).catch(e => {})
-
-      if (!options.seamless && this.player.config?.hls?.keepStatusAfterSwitch) {
-        this._keepPauseStatus()
-      }
-    }
   }
 
   _keepPauseStatus = () => {
@@ -194,7 +247,7 @@ export class HlsPlugin extends BasePlugin {
     })
   }
 
-  _transError () {
+  _transError() {
     this.hls.on(Event.ERROR, (err) => {
       if (this.player) {
         this.player.emit(Events.ERROR, new Errors(this.player, err))
@@ -202,7 +255,7 @@ export class HlsPlugin extends BasePlugin {
     })
   }
 
-  _transCoreEvent (eventName) {
+  _transCoreEvent(eventName) {
     this.hls.on(eventName, (e) => {
       if (this.player) {
         this.player.emit('core_event', {
@@ -217,9 +270,14 @@ export class HlsPlugin extends BasePlugin {
     })
   }
 
-  _emitSeiPaylodTime (e) {
+  _emitSeiPaylodTime(e) {
     try {
-      const seiJson = JSON.parse(Array.from(e.data.payload).map(x=>String.fromCharCode(x)).join('').slice(0,-1))
+      const seiJson = JSON.parse(
+        Array.from(e.data.payload)
+          .map((x) => String.fromCharCode(x))
+          .join('')
+          .slice(0, -1)
+      )
       if (!seiJson['rtmp_dts']) return
       this.player.emit('core_event', {
         eventName: Event.SEI_PAYLOAD_TIME,
@@ -227,5 +285,4 @@ export class HlsPlugin extends BasePlugin {
       })
     } catch (e) {}
   }
-
 }

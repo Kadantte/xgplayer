@@ -8,7 +8,7 @@ export default {
       },
       mse: {
         code: 2,
-        msg: '劉追加錯誤'
+        msg: '流追加錯誤'
       },
       parse: {
         code: 3,
@@ -61,6 +61,7 @@ export default {
     CSSFULLSCREEN_TIPS: '進入樣式全屏',
     EXITCSSFULLSCREEN_TIPS: '退出樣式全屏',
     TEXTTRACK: '字幕',
+    TEXTTRACK_OFF: '關閉',
     PIP: '畫中畫',
     SCREENSHOT: '截圖',
     LIVE: '正在直播',
@@ -70,7 +71,7 @@ export default {
     MINISCREEN: '小屏幕',
     REFRESH_TIPS: '請試試',
     REFRESH: '刷新',
-    FORWARD: '快进中',
+    FORWARD: '快進中',
     LIVE_TIP: '直播'
   }
 }

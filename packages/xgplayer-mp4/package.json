@@ -1,6 +1,6 @@
 {
   "name": "xgplayer-mp4",
-  "version": "3.0.15",
+  "version": "3.0.27",
   "description": "xgplayer plugin for mp4 transform to fmp4",
   "main": "dist/index.min.js",
   "module": "es/index.js",
@@ -13,7 +13,8 @@
   },
   "files": [
     "dist",
-    "es"
+    "es",
+    "CHANGELOG.md"
   ],
   "publishConfig": {
     "registry": "https://registry.npmjs.org/",
@@ -22,8 +23,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "git@github.com:bytedance/xgplayer.git"
+    "url": "git+https://github.com/bytedance/xgplayer.git",
+    "directory": "packages/xgplayer-mp4"
   },
+  "homepage": "https://h5player.bytedance.com/",
   "keywords": [
     "mp4",
     "fmp4",
@@ -36,12 +39,10 @@
   "author": "yinguohui@bytedance.com",
   "license": "MIT",
   "dependencies": {
-    "concat-typed-array": "^1.0.2",
-    "deepmerge": "^2.0.1",
     "eventemitter3": "^4.0.7",
-    "xgplayer-mp4-loader": "3.0.15",
-    "xgplayer-streaming-shared": "3.0.15",
-    "xgplayer-transmuxer": "3.0.15"
+    "xgplayer-mp4-loader": "3.0.27",
+    "xgplayer-streaming-shared": "3.0.27",
+    "xgplayer-transmuxer": "3.0.27"
   },
   "peerDependencies": {
     "xgplayer": ">=3.0.0",

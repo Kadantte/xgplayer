@@ -1,0 +1,40 @@
+{
+  "name": "xgplayer-ads",
+  "version": "3.0.27",
+  "main": "dist/index.min.js",
+  "module": "es/index.js",
+  "typings": "es/index.d.ts",
+  "sideEffects": false,
+  "libd": {
+    "umdName": "AdPlugin"
+  },
+  "files": [
+    "dist",
+    "es",
+    "CHANGELOG.md"
+  ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public",
+    "tag": "latest"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bytedance/xgplayer.git",
+    "directory": "packages/xgplayer-ads"
+  },
+  "homepage": "https://h5player.bytedance.com/",
+  "license": "MIT",
+  "unpkgFiles": [
+    "dist"
+  ],
+  "dependencies": {
+    "can-autoplay": "^3.0.2",
+    "eventemitter3": "^4.0.7",
+    "xgplayer-streaming-shared": "3.0.27"
+  },
+  "peerDependencies": {
+    "core-js": ">=3.12.1",
+    "xgplayer": "3.0.27"
+  }
+}

@@ -1,6 +1,6 @@
 {
   "name": "xgplayer",
-  "version": "3.0.15",
+  "version": "3.0.27",
   "description": "video player",
   "main": "dist/index.min.js",
   "module": "es/index.js",
@@ -34,16 +34,17 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/bytedance/xgplayer.git"
+    "url": "git+https://github.com/bytedance/xgplayer.git",
+    "directory": "packages/xgplayer"
   },
+  "homepage": "https://h5player.bytedance.com/",
   "author": "yinguohui@bytedance.com",
   "license": "MIT",
   "dependencies": {
-    "danmu.js": ">=1.1.6",
+    "danmu.js": ">=1.2.1",
     "delegate": "^3.2.0",
-    "downloadjs": "1.4.7",
     "eventemitter3": "^4.0.7",
-    "xgplayer-subtitles": "3.0.15"
+    "xgplayer-subtitles": "3.0.27"
   },
   "peerDependencies": {
     "core-js": ">=3.12.1"

@@ -4,6 +4,7 @@
 **/
 import BasePlugin, { Util, XG_DEBUG } from './basePlugin'
 import delegate from 'delegate'
+import { xgIconTips } from '../plugins/common/iconTools'
 
 const ROOT_TYPES = {
   CONTROLS: 'controls',
@@ -20,6 +21,11 @@ const POSITIONS = {
   CONTROLS_RIGHT: 'controlsRight',
   CONTROLS_CENTER: 'controlsCenter',
   CONTROLS: 'controls'
+}
+
+const PLUGIN_STATE_CLASS = {
+  ICON_DISABLE: 'xg-icon-disable',
+  ICON_HIDE: 'xg-icon-hide'
 }
 
 /**
@@ -217,6 +223,8 @@ class Plugin extends BasePlugin {
     return dels
   }
 
+  static iconTip = xgIconTips;
+
   static get ROOT_TYPES () {
     return ROOT_TYPES
   }
@@ -260,6 +268,12 @@ class Plugin extends BasePlugin {
      * @type { HTMLElement }
      */
     this.parent = null
+    /**
+     * store the extra HTMLElements except root
+     * @readonly
+     * @type {HTMLElement[]}
+     */
+    this.extraEls = []
 
     const _orgicons = this.registerIcons() || {}
     registerIconsObj(_orgicons, this)
@@ -406,6 +420,19 @@ class Plugin extends BasePlugin {
 
   plugins () {
     return this._children
+  }
+
+  /**
+   *
+   */
+  disable () {
+    this.config.disable = true
+    Util.addClass(this.find('.xgplayer-icon'), PLUGIN_STATE_CLASS.ICON_DISABLE)
+  }
+
+  enable () {
+    this.config.disable = false
+    Util.removeClass(this.find('.xgplayer-icon'), PLUGIN_STATE_CLASS.ICON_DISABLE)
   }
 
   children () {
@@ -573,6 +600,7 @@ class Plugin extends BasePlugin {
   }
 
   /**
+   *
    * @param { string } [value]
    * @returns
    */
@@ -584,7 +612,7 @@ class Plugin extends BasePlugin {
     const cs = window.getComputedStyle(this.root, null)
     const cssDisplayValue = cs.getPropertyValue('display')
     if (cssDisplayValue === 'none') {
-      this.root.style.display = 'block'
+      return (this.root.style.display = 'block')
     }
   }
 
@@ -657,11 +685,13 @@ class Plugin extends BasePlugin {
     ['root', 'parent'].map(item => {
       this[item] = null
     })
+    this.extraEls = []
   }
 }
 
 export {
   Plugin as default,
   ROOT_TYPES,
-  POSITIONS
+  POSITIONS,
+  PLUGIN_STATE_CLASS
 }

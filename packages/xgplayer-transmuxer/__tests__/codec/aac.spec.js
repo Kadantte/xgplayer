@@ -37,12 +37,47 @@ describe('AAC', () => {
     expect(result.frames[1].pts).toBe(902998.7959183673)
     expect(result.frames[0].data).toEqual(new Uint8Array(frame1))
     expect(result.frames[1].data).toEqual(new Uint8Array(frame2))
-    expect(result.config).toEqual([18, 16])
-    expect(result.codec).toBe('mp4a.40.2')
+    expect(result.config).toEqual([42, 18, 8, 0])
+    expect(result.codec).toBe('mp4a.40.5')
     expect(result.originCodec).toBe('mp4a.40.2')
     expect(result.channelCount).toBe(2)
     expect(result.objectType).toBe(2)
     expect(result.sampleRate).toBe(44100)
+  })
+
+  test('parseADTS drops malformed frames and keeps scanning for valid frames', () => {
+    // Frames whose declared length does not extend past the ADTS header have no AAC payload.
+    // Drop them and keep scanning so later valid frames can still be demuxed.
+    const frame2 = [33, 32, 73, 144, 2, 25, 0, 35, 128]
+    const data = new Uint8Array([
+      // frameLength = 0: invalid length, no payload.
+      0xff, 0xf1, 0x50, 0x80, 0x00, 0x00, 0xfc,
+      // frameLength = 6: shorter than the 7-byte ADTS header.
+      0xff, 0xf1, 0x50, 0x80, 0x00, 0xc0, 0xfc,
+      // frameLength = 7: header only, no payload.
+      0xff, 0xf1, 0x50, 0x80, 0x00, 0xe0, 0xfc,
+      // frameLength = 16: header + 9 bytes payload.
+      0xff, 0xf1, 0x50, 0x80, 0x02, 0x1f, 0xfc,
+      ...frame2
+    ])
+
+    const result = AAC.parseADTS(data, 1000)
+
+    expect(result.droppedFrames).toBe(3)
+    expect(result.frames.length).toBe(1)
+    expect(result.frames[0].data).toEqual(new Uint8Array(frame2))
+    expect(result.frames[0].pts).toBe(1000)
+  })
+
+  test('parseADTS counts a terminal header-only frame as dropped', () => {
+    const result = AAC.parseADTS(new Uint8Array([
+      // frameLength = 7: header only, no payload.
+      0xff, 0xf1, 0x50, 0x80, 0x00, 0xe0, 0xfc
+    ]), 1000)
+
+    expect(result.droppedFrames).toBe(1)
+    expect(result.remaining).toBe(undefined)
+    expect(result.frames.length).toBe(0)
   })
 
   test('parseAudioSpecificConfig', () => {
@@ -52,10 +87,10 @@ describe('AAC', () => {
 
     expect(result.channelCount).toBe(2)
     expect(result.objectType).toBe(2)
-    expect(result.codec).toBe('mp4a.40.2')
+    expect(result.codec).toBe('mp4a.40.5')
     expect(result.originCodec).toBe('mp4a.40.2')
     expect(result.sampleRate).toBe(44100)
-    expect(result.config).toEqual([18, 16])
+    expect(result.config).toEqual([42, 18, 8, 0])
   })
 
   test('getFrameDuration', () => {

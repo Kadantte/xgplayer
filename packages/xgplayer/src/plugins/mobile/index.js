@@ -64,7 +64,7 @@ class MobilePlugin extends Plugin {
       scopeR: 0.25, // Gesture range on the right
       scopeM: 0.9, // Middle gesture range
       pressRate: 2, // playbackRate when long press
-      darkness: true, // Whether to enable the dimming function on the right
+      darkness: true, // Whether to enable the dimming function on the left
       maxDarkness: 0.8, // Maximum darkness，maximum transparency of the mask
       disableActive: false, // Whether to disable the time prompt
       disableTimeProgress: false, // Whether to disable the time progress bar
@@ -103,6 +103,11 @@ class MobilePlugin extends Plugin {
      * @private
      */
     this.timer = null
+    /**
+     * 标记touch事件状态，供PC插件使用
+     * @private
+     */
+    this._isTouchActive = false
   }
 
   get duration () {
@@ -152,9 +157,16 @@ class MobilePlugin extends Plugin {
      */
     player.root.addEventListener('touchmove', this.onRootTouchMove, true)
     player.root.addEventListener('touchend', this.onRootTouchEnd, true)
+    player.root.addEventListener('touchcancel', this.onRootTouchEnd, true)
+    const { controls } = this.player
+    if (controls && controls.center) {
+      controls.center.addEventListener('touchmove', this.onRootTouchMove, true)
+      controls.center.addEventListener('touchend', this.onRootTouchEnd, true)
+      controls.center.addEventListener('touchcancel', this.onRootTouchEnd, true)
+    }
     this.on(Events.DURATION_CHANGE, () => {
       const { player, config } = this
-      if (player.duration * 1000 < config.moveDuration) {
+      if (player.duration > 0 && player.duration * 1000 < config.moveDuration) {
         config.moveDuration = player.duration * 1000
       }
     })
@@ -188,9 +200,11 @@ class MobilePlugin extends Plugin {
       if (progressPlugin) {
         progressPlugin.addCallBack('dragmove', (data) => {
           this.activeSeekNote(data.currentTime, data.forward)
-        })
-        progressPlugin.addCallBack('dragend', () => {
-          this.changeAction(ACTIONS.AUTO)
+        });
+        ['dragend', 'click'].forEach(key => {
+          progressPlugin.addCallBack(key, () => {
+            this.changeAction(ACTIONS.AUTO)
+          })
         })
       }
     }
@@ -348,6 +362,7 @@ class MobilePlugin extends Plugin {
    */
   endLastMove (lastScope) {
     const { pos, player, config } = this
+
     const time = (pos.time - this.timeOffset) / 1000
     switch (lastScope) {
       case 0:
@@ -367,8 +382,17 @@ class MobilePlugin extends Plugin {
   onTouchStart = (e) => {
     const { player, config, pos, playerConfig } = this
     const touche = this.getTouche(e)
+
+    // 标记touch事件状态
+    this._isTouchActive = true
+    if (this.touchActiveTimer) {
+      clearTimeout(this.touchActiveTimer)
+      this.touchActiveTimer = null
+    }
+
     if (touche && !config.disableGesture && this.duration > 0 && !player.ended) {
       pos.isStart = true
+      this.timer && clearTimeout(this.timer)
       // e.cancelable && e.preventDefault()
       Util.checkIsFunction(playerConfig.disableSwipeHandler) && playerConfig.disableSwipeHandler()
       this.find('.xg-dur').innerHTML = Util.format(this.duration)
@@ -427,7 +451,7 @@ class MobilePlugin extends Plugin {
       if (scope === -1 || (scope > 0 && !config.gestureY) || (scope === 0 && !config.gestureX)) {
         return
       }
-      e.cancelable && e.preventDefault()
+      // e.cancelable && e.preventDefault()
       this.executeMove(diffx, diffy, scope, pos.width, pos.height)
       pos.x = x
       pos.y = y
@@ -438,6 +462,18 @@ class MobilePlugin extends Plugin {
 
   onTouchEnd = (e) => {
     const { player, pos, playerConfig } = this
+
+    // 延迟重置touch事件状态，确保后续的mouse事件被忽略
+    if (this.touchActiveTimer) {
+      clearTimeout(this.touchActiveTimer)
+    }
+    this.touchActiveTimer = setTimeout(() => {
+      this._isTouchActive = false
+    }, 10)
+
+    setTimeout(() => {
+      player.getPlugin('progress') && player.getPlugin('progress').resetSeekState()
+    }, 10)
     if (!pos.isStart) {
       return
     }
@@ -448,9 +484,6 @@ class MobilePlugin extends Plugin {
     const { disableGesture, gestureX } = this.config
     if (!disableGesture && gestureX) {
       this.endLastMove(pos.scope)
-      setTimeout(() => {
-        player.getPlugin('progress') && player.getPlugin('progress').resetSeekState()
-      }, 10)
     } else {
       pos.time = 0
     }
@@ -483,8 +516,7 @@ class MobilePlugin extends Plugin {
   }
 
   onRootTouchEnd = (e) => {
-    if (this.pos.isStart && this.checkIsRootTarget(e)) {
-      e.stopPropagation()
+    if (this.pos.scope > -1) {
       this.onTouchEnd(e)
       // const { controls } = this.player
       // controls && controls.recoverAutoHide()
@@ -604,10 +636,13 @@ class MobilePlugin extends Plugin {
   }
 
   updateBrightness (percent) {
+    const { pos, config, xgMask } = this
+    if (!config.darkness) {
+      return
+    }
     if (this.player.rotateDeg) {
       percent = -percent
     }
-    const { pos, config, xgMask } = this
     let light = pos.light + (0.8 * percent)
     light = light > config.maxDarkness ? config.maxDarkness : (light < 0 ? 0 : light)
     if (xgMask) {
@@ -669,12 +704,12 @@ class MobilePlugin extends Plugin {
 
   // 动态禁用手势
   disableGesture () {
-    this.config.disableGesture = false
+    this.config.disableGesture = true
   }
 
   // 动态启用手势
   enableGesture () {
-    this.config.disableGesture = true
+    this.config.disableGesture = false
   }
 
   destroy () {
@@ -687,6 +722,13 @@ class MobilePlugin extends Plugin {
     this.touch = null
     player.root.removeEventListener('touchmove', this.onRootTouchMove, true)
     player.root.removeEventListener('touchend', this.onRootTouchEnd, true)
+    player.root.removeEventListener('touchcancel', this.onRootTouchEnd, true)
+    const { controls } = this.player
+    if (controls && controls.center) {
+      controls.center.removeEventListener('touchmove', this.onRootTouchMove, true)
+      controls.center.removeEventListener('touchend', this.onRootTouchEnd, true)
+      controls.center.removeEventListener('touchcancel', this.onRootTouchEnd, true)
+    }
   }
 
   render () {

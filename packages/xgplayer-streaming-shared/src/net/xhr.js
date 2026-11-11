@@ -1,5 +1,5 @@
 import { NetError } from './error'
-import { createResponse, getRangeValue, setUrlParams, calculateSpeed } from './helper'
+import { createResponse, getRangeValue, setUrlParams, calculateSpeed, getRangeResponseMismatchReason } from './helper'
 import { ResponseType } from './types'
 import { EVENT } from '../event'
 import EventEmitter from 'eventemitter3'
@@ -36,6 +36,11 @@ export class XhrLoader extends EventEmitter {
   _firstRtt
   _onCancel = null
   _priOptions = null // 比较私有化的参数传递，回调时候透传
+  _dynamicTimeoutIns = null
+  _rangeRequestZeroContentLengthAsError = false
+  _rangeRequestMustReturn206 = false
+  _abortByHeaderValidation = false
+  _currentRequestRange = null
 
 
   constructor () {
@@ -56,11 +61,16 @@ export class XhrLoader extends EventEmitter {
     this._runing = true
     this._vid = req.vid || req.url
     this._responseType = req.responseType
+    this._dynamicTimeoutIns = req.dynamicTimeoutIns
     this._firstRtt = -1
     this._onTimeout = req.onTimeout
     this._onCancel = req.onCancel
     this._request = req.request
     this._priOptions = req.priOptions || {}
+    this._rangeRequestZeroContentLengthAsError = !!req.rangeRequestZeroContentLengthAsError
+    this._rangeRequestMustReturn206 = !!req.rangeRequestMustReturn206
+    this._abortByHeaderValidation = false
+    this._currentRequestRange = null
     this._logger.debug('【xhrLoader task】, range', this._range)
 
     this._url = setUrlParams(req.url, req.params)
@@ -73,7 +83,7 @@ export class XhrLoader extends EventEmitter {
     }).catch((error) => {
       clearTimeout(this._timeoutTimer)
       this._runing = false
-      if (this._aborted) return
+      if (this._aborted && error.message !== 'timeout') return
       error = error instanceof NetError ? error : new NetError(this._url, this._request)
       error.startTime = startTime
       error.endTime = Date.now()
@@ -105,25 +115,44 @@ export class XhrLoader extends EventEmitter {
 
   _internalOpen (range) {
     try {
+      this._currentRequestRange = range
       this._startTime = Date.now()
       const xhr = this._xhr = new XMLHttpRequest()
       xhr.open(this._method || 'GET', this._url, true)
       xhr.responseType = this._responseType
-      this._timeout && (xhr.timeout = this._timeout)
+      let timeoutMs = this._timeout
+      if( this._dynamicTimeoutIns &&
+        typeof this._dynamicTimeoutIns.getTimeout === 'function'){
+          timeoutMs = this._dynamicTimeoutIns.getTimeout(this._timeout) * (this._priOptions.useTimeoutRatio ? this._dynamicTimeoutIns.timeoutRatio : 1)
+          timeoutMs = this._dynamicTimeoutIns.getClampedTimeout(timeoutMs)
+      }
+      if (timeoutMs) {
+        xhr.timeout = timeoutMs
+        this.curTimeout = timeoutMs
+      }
+      this._logger.debug('[dytimeout] xhr set timeout', timeoutMs)
       xhr.withCredentials = this._withCredentials
       xhr.onload = this._onLoad.bind(this)
       xhr.onreadystatechange = this._onReadyStatechange.bind(this)
       xhr.onerror = (errorEvent) => {
         this._running = false
+        if (this._abortByHeaderValidation) return
         const error = new NetError(this._url, this._request, errorEvent?.currentTarget?.response, ('xhr.onerror.status:' + errorEvent?.currentTarget?.status + ',statusText,' + errorEvent?.currentTarget?.statusText))
         error.options = {index: this._index, range: this._range, vid: this._vid, priOptions: this._priOptions}
         this._loadCompleteReject(error)
       }
       xhr.ontimeout = (event) => {
+        if (
+          this._dynamicTimeoutIns &&
+          typeof this._dynamicTimeoutIns.update === 'function'
+        ) {
+          this._logger.debug('[dytimeout] xhr timeout update rtt,', xhr.timeout * 5)
+          this._dynamicTimeoutIns.update(xhr.timeout * 5)
+        }
         this.cancel()
         const error = new NetError(this._url, this._request, {status:408}, 'timeout')
+        error.isTimeout = true
         if (this._onTimeout) {
-          error.isTimeout = true
           this._onTimeout(error,{index: this._index, range: this._range, vid: this._vid, priOptions: this._priOptions})
         }
         error.options = {index: this._index, range: this._range, vid: this._vid, priOptions: this._priOptions}
@@ -139,7 +168,7 @@ export class XhrLoader extends EventEmitter {
           xhr.setRequestHeader(k, headers[k])
         })
       }
-      this._logger.debug('[xhr.send->] tast,', this._range, ',load sub range, ', range)
+      this._logger.debug('[xhr.send->] tast,', this._range, ',load sub range, ', range,',[dytimeout],', timeoutMs)
       xhr.send(this._body)
     } catch (e) {
       e.options = {index: this._index, range, vid: this._vid, priOptions: this._priOptions}
@@ -150,7 +179,26 @@ export class XhrLoader extends EventEmitter {
   _onReadyStatechange (e) {
     const xhr = e.target
     if (xhr.readyState === 2) {
-      this._firstRtt < 0 && (this._firstRtt = Date.now())
+      const responseHeaders = this._getHeaders(xhr)
+      if (this._firstRtt < 0) {
+        this._firstRtt = Date.now()
+        this._priOptions.rtt = this._firstRtt - this._startTime
+      }
+      if (
+        this._dynamicTimeoutIns &&
+        typeof this._dynamicTimeoutIns.update === 'function'
+      ) {
+        this._logger.debug('[dytimeout] xhr update rtt,', this._priOptions.rtt)
+        this._dynamicTimeoutIns.update(this._priOptions.rtt)
+      }
+      const headerValidationError = this._getRangeHeaderValidationError(xhr.status, responseHeaders, xhr.responseURL)
+      if (headerValidationError) {
+        this._abortByHeaderValidation = true
+        this._running = false
+        xhr.abort()
+        headerValidationError.options = {index: this._index, range: this._range, vid: this._vid, priOptions: this._priOptions}
+        this._loadCompleteReject(headerValidationError)
+      }
     }
   }
 
@@ -158,6 +206,17 @@ export class XhrLoader extends EventEmitter {
     const status = e.target.status
     if (status < 200 || status > 299) {
       const error = new NetError(this._url, null, { ...e.target.response, status }, 'bad response,status:' + status)
+      error.options = {index: this._index, range: this._range, vid: this._vid, priOptions: this._priOptions}
+      return this._loadCompleteReject(error)
+    }
+    const responseHeaders = this._getHeaders(this._xhr)
+    if (this._shouldTreatRangeZeroContentLengthAsError(status, responseHeaders)) {
+      const error = new NetError(
+        this._url,
+        this._request,
+        { status, headers: responseHeaders },
+        'bad response,range request returned 200 with zero content-length'
+      )
       error.options = {index: this._index, range: this._range, vid: this._vid, priOptions: this._priOptions}
       return this._loadCompleteReject(error)
     }
@@ -190,7 +249,7 @@ export class XhrLoader extends EventEmitter {
       status,
       statusText: this._xhr.statusText,
       url: this._xhr.responseURL,
-      headers: this._getHeaders(this._xhr),
+      headers: responseHeaders,
       body: this._xhr.response
     }
     if (this._transformResponse) {
@@ -257,5 +316,61 @@ export class XhrLoader extends EventEmitter {
       headers[parts[0].toLowerCase()] = parts.slice(1).join(': ')
     }
     return headers
+  }
+
+  _shouldTreatRangeZeroContentLengthAsError (status, headers) {
+    if (!this._rangeRequestZeroContentLengthAsError) return false
+    if (!Array.isArray(this._range) || this._range.length < 2) return false
+    if (status !== 200) return false
+    const contentLength = parseInt(headers?.['content-length'] || '', 10)
+    return contentLength === 0
+  }
+
+  _getRangeHeaderValidationError (status, headers, responseURL) {
+    if (this._shouldAbortRangeRequestForNon206(status, responseURL)) {
+      return new NetError(
+        this._url,
+        this._request,
+        { status, headers, url: responseURL },
+        'bad response,range request must return 206 unless redirected'
+      )
+    }
+    const rangeMismatchReason = this._getRangeResponseMismatchReason(headers)
+    if (rangeMismatchReason) {
+      return new NetError(
+        this._url,
+        this._request,
+        { status, headers, url: responseURL },
+        `bad response,${rangeMismatchReason}`
+      )
+    }
+    if (this._shouldTreatRangeZeroContentLengthAsError(status, headers)) {
+      return new NetError(
+        this._url,
+        this._request,
+        { status, headers, url: responseURL },
+        'bad response,range request returned 200 with zero content-length'
+      )
+    }
+  }
+
+  _shouldAbortRangeRequestForNon206 (status, responseURL) {
+    if (!this._rangeRequestMustReturn206) return false
+    if (!Array.isArray(this._range) || this._range.length < 2) return false
+    if (status === 206) return false
+    return !this._isRedirectedResponse(responseURL)
+  }
+
+  _isRedirectedResponse (responseURL) {
+    return !!(responseURL && responseURL !== this._url)
+  }
+
+  _getRangeResponseMismatchReason (headers) {
+    if (!this._rangeRequestMustReturn206) return false
+    return getRangeResponseMismatchReason(
+      this._currentRequestRange || this._range,
+      headers?.['content-range'],
+      headers?.['content-length']
+    )
   }
 }
